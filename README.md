@@ -10,7 +10,7 @@ A self-hosted, feature-rich presence indicator that displays your Microsoft Team
 
 
 <img width="1281" height="928" alt="Screenshot 2025-10-19 205620" src="https://github.com/user-attachments/assets/7475aaea-75f9-4e52-9cdd-87d1ecade3ec" />
-<img width="1280" height="636" alt="Screenshot 2025-10-19 205634" src="https://github.com/user-attachments/assets/8141c416-9e4c-4d88-9a4a-f12e892e9cd1" />
+<img width="1280" height="636" alt="Screenshot 2025-10-19 205634" src="https://github.com/user-attachments/assets/2271db48-c16d-46fa-b4f5-e5498f2abbc5" />
 <img width="1256" height="993" alt="Screenshot 2025-10-19 205646" src="https://github.com/user-attachments/assets/f87d6df4-8496-4b3d-abc3-5b28d5bc72cb" />
 <img width="1265" height="817" alt="Screenshot 2025-10-19 205700" src="https://github.com/user-attachments/assets/8f7c4611-e0f4-4642-95ee-25c9c2feffef" />
 <img width="1259" height="544" alt="Screenshot 2025-10-19 205710" src="https://github.com/user-attachments/assets/d21f6fa0-f0da-4930-b58e-f02b6571ffa2" />
