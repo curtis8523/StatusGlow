@@ -24,7 +24,7 @@
 
 // Device/AP name
 #define THING_NAME "StatusGlow"
-#define WIFI_INITIAL_AP_PASSWORD "pageaz1986"
+#define WIFI_INITIAL_AP_PASSWORD_PREFIX "statusglow"
 
 // UI defaults (frontend can override using values provided by /api/settings)
 #define UI_CPU_OK 50           // percent below this is OK
@@ -47,11 +47,11 @@
 // Protected UI pages and management APIs require this key via either:
 // - HTTP header 'X-StatusGlow-Key' or legacy 'X-OTA-Key'
 // - query/form parameter 'key'
-// Reusing the initial AP password keeps these routes off the open LAN by default.
-#define ADMIN_SHARED_KEY WIFI_INITIAL_AP_PASSWORD
+// Leave blank to reuse the generated initial AP password by default.
+#define ADMIN_SHARED_KEY ""
 
 // OTA security
-// Uses the same key unless explicitly overridden.
+// Leave blank to reuse the admin key.
 #define OTA_SHARED_KEY ADMIN_SHARED_KEY
 
 // Status LED configuration (onboard WS2812 on S3 board)

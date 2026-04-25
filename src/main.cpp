@@ -34,9 +34,14 @@
 #define DBG_PRINTLN(x) do{}while(0)
 #endif
 
-// SoftAP SSID and password used when falling back to local AP
-const char thingName[] = THING_NAME;
-const char wifiInitialApPassword[] = WIFI_INITIAL_AP_PASSWORD;
+// Device identity and first-time access credentials
+String gThingName;
+String gThingHostName;
+String gDeviceSuffixUpper;
+String gDeviceSuffixLower;
+String gWifiInitialApPassword;
+String gAdminSharedKey;
+String gOtaSharedKey;
 
 // Available if we later add a DNS-based captive portal
 DNSServer dnsServer;
@@ -381,7 +386,7 @@ uint8_t retries = 0;
 
 // AP state flag
 bool gApEnabled = false;
-String gApSsid; // SoftAP SSID (built from THING_NAME + MAC suffix)
+String gApSsid; // SoftAP SSID (matches the generated device name)
 
 String getPresentedSharedKey() {
 	String k = server.header("X-StatusGlow-Key");
@@ -415,37 +420,49 @@ bool requireSharedKey(const char* expectedKey, const char* scope) {
 }
 
 bool isAdminRequestAuthorized() {
-	return isRequestAuthorized(ADMIN_SHARED_KEY);
+	return isRequestAuthorized(gAdminSharedKey.c_str());
 }
 
 bool requireAdminAuth() {
-	return requireSharedKey(ADMIN_SHARED_KEY, "admin");
+	return requireSharedKey(gAdminSharedKey.c_str(), "admin");
 }
 
 bool requireOtaAuth() {
-	return requireSharedKey(OTA_SHARED_KEY, "ota");
+	return requireSharedKey(gOtaSharedKey.c_str(), "ota");
+}
+
+static String withSuffixWithinLimit(const String& base, const String& suffix, size_t maxLen) {
+	const size_t suffixOverhead = 1 + suffix.length();
+	if (maxLen <= suffixOverhead) return suffix;
+	String trimmedBase = base;
+	if (trimmedBase.length() + suffixOverhead > maxLen) {
+		trimmedBase.remove(maxLen - suffixOverhead);
+	}
+	return trimmedBase + "-" + suffix;
+}
+
+static String getDeviceSuffixUpper() {
+	char buf[5];
+	snprintf(buf, sizeof(buf), "%04X", (uint16_t)(ESP.getEfuseMac() & 0xFFFFu));
+	return String(buf);
+}
+
+static void initDeviceIdentity() {
+	gDeviceSuffixUpper = getDeviceSuffixUpper();
+	gDeviceSuffixLower = gDeviceSuffixUpper;
+	gDeviceSuffixLower.toLowerCase();
+	gThingName = withSuffixWithinLimit(String(THING_NAME), gDeviceSuffixUpper, 31);
+	gThingHostName = gThingName;
+	gThingHostName.toLowerCase();
+	gWifiInitialApPassword = String(WIFI_INITIAL_AP_PASSWORD_PREFIX) + "-" + gDeviceSuffixLower;
+	if (strlen(ADMIN_SHARED_KEY) > 0) gAdminSharedKey = String(ADMIN_SHARED_KEY);
+	else gAdminSharedKey = gWifiInitialApPassword;
+	if (strlen(OTA_SHARED_KEY) > 0) gOtaSharedKey = String(OTA_SHARED_KEY);
+	else gOtaSharedKey = gAdminSharedKey;
 }
 
 static String makeApSsid() {
-	// Build SSID: THING_NAME-XXXXXX (last 3 MAC bytes)
-	String base = String(thingName);
-	String mac = WiFi.macAddress(); // AA:BB:CC:DD:EE:FF
-	int last1 = mac.lastIndexOf(':');
-	int last2 = (last1 > 0) ? mac.lastIndexOf(':', last1 - 1) : -1;
-	int last3 = (last2 > 0) ? mac.lastIndexOf(':', last2 - 1) : -1;
-	String sfx;
-	if (last1 > 0 && last2 > 0 && last3 > 0) {
-		String b1 = mac.substring(last3 + 1, last2);
-		String b2 = mac.substring(last2 + 1, last1);
-		String b3 = mac.substring(last1 + 1);
-		sfx = b1 + b2 + b3; // 6 hex chars
-	} else {
-		sfx = String((uint32_t)ESP.getEfuseMac(), HEX);
-	}
-	sfx.toUpperCase();
-	String ssid = base + "-" + sfx;
-	if (ssid.length() > 31) ssid.remove(31);
-	return ssid;
+	return gThingName;
 }
 
 static void startSoftAPIfNeeded() {
@@ -465,12 +482,12 @@ static void startSoftAPIfNeeded() {
 		IPAddress subnet(255,255,255,0);
 		WiFi.softAPConfig(local_IP, gateway, subnet);
 		
-		WiFi.softAP(gApSsid.c_str(), wifiInitialApPassword, 1, 0, 4);
+		WiFi.softAP(gApSsid.c_str(), gWifiInitialApPassword.c_str(), 1, 0, 4);
 		delay(500);
 		
 		gApEnabled = true;
 		IPAddress apip = WiFi.softAPIP();
-		DBG_PRINT(F("SoftAP active. Connect to SSID '")); DBG_PRINT(gApSsid.c_str()); DBG_PRINT(F("' (pass: '")); DBG_PRINT(wifiInitialApPassword); DBG_PRINT(F("') and open http://")); DBG_PRINTLN(apip.toString().c_str());
+		DBG_PRINT(F("SoftAP active. Connect to SSID '")); DBG_PRINT(gApSsid.c_str()); DBG_PRINT(F("' (pass: '")); DBG_PRINT(gWifiInitialApPassword.c_str()); DBG_PRINT(F("') and open http://")); DBG_PRINTLN(apip.toString().c_str());
 	}
 }
 
@@ -676,7 +693,7 @@ void removeContext() {
 
 void startMDNS() {
 	DBG_PRINTLN("startMDNS()");
-    if (!MDNS.begin(thingName)) {
+    if (!MDNS.begin(gThingHostName.c_str())) {
         DBG_PRINTLN("Error setting up MDNS responder!");
 		addLog("mDNS setup failed");
         while(1) {
@@ -686,9 +703,9 @@ void startMDNS() {
 	MDNS.addService("http", "tcp", 80);
 
     DBG_PRINT("mDNS responder started: ");
-    DBG_PRINT(thingName);
+    DBG_PRINT(gThingHostName.c_str());
     DBG_PRINTLN(".local");
-	addLogf("mDNS started: %s.local", thingName);
+	addLogf("mDNS started: %s.local", gThingHostName.c_str());
 }
 
 // Synchronize time via NTP so TLS validation succeeds
@@ -1093,6 +1110,8 @@ void setup()
 	EFFECTS_UNLOCK();
 	setAnimation(0, FX_MODE_STATIC, BLACK);
 	
+	initDeviceIdentity();
+
 	// Prepare dynamic AP SSID early so UI reflects it even if AP is off
 	gApSsid = makeApSsid();
 	
@@ -1113,6 +1132,7 @@ void setup()
 	delay(100);
 	
 	WiFi.mode(WIFI_STA);
+	WiFi.setHostname(gThingHostName.c_str());
 	WiFi.setAutoConnect(true);
 	WiFi.persistent(true);
 	WiFi.begin();
@@ -1153,7 +1173,7 @@ void setup()
 			if (ok) ESP.restart();
 		},
 		[]() {
-			if (!isRequestAuthorized(OTA_SHARED_KEY)) { otaLog("OTA upload unauthorized (chunk)"); return; }
+			if (!isRequestAuthorized(gOtaSharedKey.c_str())) { otaLog("OTA upload unauthorized (chunk)"); return; }
 			HTTPUpload &upload = server.upload();
 			static size_t s_ota_total = 0; static size_t s_ota_written = 0; static int s_ota_milestone = 0;
 			if (upload.status == UPLOAD_FILE_START) {

@@ -23,7 +23,7 @@ It is set up for:
 - Default board/environment: `seeed_xiao_esp32s3`
 - Status LED pin: `GPIO21` on supported ESP32-S3 boards
 
-These defaults come from [platformio.ini](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/platformio.ini) and can be changed there.
+These defaults come from [platformio.ini](platformio.ini) and can be changed there.
 
 ## Build And Flash
 
@@ -57,25 +57,27 @@ pio run -e waveshare_esp32s3_zero -t upload
 
 If the device does not have working Wi-Fi, it starts its own AP:
 
-- SSID: `StatusGlow-XXXXXX`
-- Password: `pageaz1986`
+- SSID: `StatusGlow-XXXX`
+- Password: `statusglow-xxxx`
 - IP: `http://192.168.4.1`
+
+`XXXX` is the last two octets of the device MAC address in hex. The same suffix is also added to the device hostname, so the device will show up with a matching name like `statusglow-ab12.local`.
 
 ## Web UI Security
 
 Admin pages and management APIs are protected by a shared key. By default it matches the AP password:
 
-- Key: `pageaz1986`
+- Key: `statusglow-xxxx`
 
 Open the UI with the key in the URL:
 
 ```text
-http://192.168.4.1/?key=pageaz1986
+http://192.168.4.1/?key=statusglow-xxxx
 ```
 
 The UI will carry that key to the other pages and API calls automatically.
 
-If you want to change the default, update `WIFI_INITIAL_AP_PASSWORD` / `ADMIN_SHARED_KEY` in [src/config.h](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/src/config.h).
+If you want to change the default, update `THING_NAME`, `WIFI_INITIAL_AP_PASSWORD_PREFIX`, and optionally `ADMIN_SHARED_KEY` in [src/config.h](src/config.h).
 
 ## Microsoft Teams Setup
 
@@ -103,11 +105,11 @@ Then click `Start device login`, open the Microsoft device login page, and compl
 
 ## Main Config Files
 
-- [platformio.ini](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/platformio.ini): board environments, LED pin, LED count
-- [src/config.h](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/src/config.h): runtime defaults, AP password, admin key, status LED settings
-- [src/main.cpp](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/src/main.cpp): firmware logic and API routes
-- [src/request_handler.h](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/src/request_handler.h): embedded web UI
-- [src/spiffs_webserver.h](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/src/spiffs_webserver.h): SPIFFS helpers and upload endpoints
+- [platformio.ini](platformio.ini): board environments, LED pin, LED count
+- [src/config.h](src/config.h): runtime defaults, AP password, admin key, status LED settings
+- [src/main.cpp](src/main.cpp): firmware logic and API routes
+- [src/request_handler.h](src/request_handler.h): embedded web UI
+- [src/spiffs_webserver.h](src/spiffs_webserver.h): SPIFFS helpers and upload endpoints
 
 ## Common Tasks
 
@@ -139,7 +141,7 @@ LEDs do not respond:
 
 Cannot reach the UI:
 
-- Join the device AP and use `http://192.168.4.1/?key=pageaz1986`
+- Join the device AP and use `http://192.168.4.1/?key=statusglow-xxxx`
 - If on normal Wi-Fi, find the device IP from serial output or your router
 
 Teams status does not update:
@@ -154,4 +156,4 @@ Assets like logo/favicon do not appear:
 
 ## License
 
-MIT. See [LICENSE](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/LICENSE).
+MIT. See [LICENSE](LICENSE).
