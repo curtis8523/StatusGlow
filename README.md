@@ -1,286 +1,157 @@
 # StatusGlow
 
-**Microsoft Teams Presence Indicator for ESP32 with NeoPixel LEDs**
+StatusGlow is an ESP32-based Microsoft Teams presence light with a built-in web UI for setup, effects, logs, and OTA updates.
 
-A self-hosted, feature-rich presence indicator that displays your Microsoft Teams status using smooth LED animations. Built for Seeed Studio XIAO ESP32 boards with a modern web interface.
+It is set up for:
+- Seeed Studio XIAO ESP32S3 by default
+- Seeed Studio XIAO ESP32C3 and Waveshare ESP32-S3-Zero as additional PlatformIO environments
+- WS2812B RGB or SK6812 RGBW LED strips
 
-![StatusGlow Banner](https://img.shields.io/badge/Platform-ESP32-blue) ![PlatformIO](https://img.shields.io/badge/Built%20with-PlatformIO-orange) ![License](https://img.shields.io/badge/License-MIT-green)
+## What It Does
 
-## ✨ Features
+- Polls Microsoft Teams presence with device login
+- Displays status with configurable LED effects and colors
+- Lets you change RGB/RGBW mode at runtime
+- Hosts a local web UI for config, effects, logs, and firmware upload
+- Falls back to a local AP when Wi-Fi is not configured
+- Supports an onboard status LED on ESP32-S3 boards that have one on GPIO21
 
-### LED Effects & Control
-- **19 Smooth Effects**: Static, Breath, Fade, Scan, Dual Scan, Comet, Rainbow, Theater Chase, Color Wipe, Running Lights, Twinkle, Sparkle, Confetti, Fire Flicker, Filler Up, and more
-- **Runtime RGB/RGBW Switching**: Change between RGB (WS2812B) and RGBW (SK6812) LED types via web UI - no recompilation needed
-- **Smooth Animations**: Sub-pixel interpolation for buttery-smooth motion
-- **Speed Control**: Duration slider (0-60s) with consistent behavior across all effects
-- **Per-Profile Customization**: Different effects for each Teams status (Available, Busy, Away, etc.)
-- **Gamma Correction**: Adjustable for accurate color reproduction
-- **Brightness Control**: 0-255 with per-profile overrides
+## Default Hardware Settings
 
-### Hardware Control
-- **Physical Button** (GPIO7):
-  - Hold 3s: Reboot device
-  - Hold 8s: Factory reset
-  - Visual LED feedback during press
-- **Status LED** (ESP32S3 only, GPIO21):
-  - Onboard WS2812 shows device state
-  - Toggle on/off in web UI
-  - See [STATUS_LED.md](STATUS_LED.md) for details
-- **Configurable Pins**: LED on GPIO8, Button on GPIO7
+- LED data pin: `D8`
+- LED count: `16`
+- Default board/environment: `seeed_xiao_esp32s3`
+- Status LED pin: `GPIO21` on supported ESP32-S3 boards
 
-### Web Interface
-- **Modern UI**: Clean, responsive design
-- **Live Monitoring**: Real-time status, CPU/memory, WiFi signal
-- **Configuration**: Teams setup, WiFi, LED type, device control
-- **Effects Editor**: Visual effect customization with preview
-- **Live Logs**: Real-time device logs with auto-refresh
-- **OTA Updates**: Firmware updates via web UI
+These defaults come from [platformio.ini](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/platformio.ini) and can be changed there.
 
-### Security & Reliability
-- **Optional OTA Key**: Secure firmware updates
-- **Factory Reset**: Hardware button or API
-- **Persistent Settings**: Survives reboots
-- **Auto-Reconnect**: WiFi and Teams API resilience
+## Build And Flash
 
-## Hardware Requirements
-
-### Supported Boards
-- **XIAO ESP32S3** (Recommended) - Dual-core, PSRAM, smoothest performance, includes onboard status LED
-- **XIAO ESP32C3** - Single-core RISC-V, great performance
-
-### Components
-- ESP32 board (above)
-- WS2812B (RGB) or SK6812 (RGBW) LED strip
-- Momentary push button (optional but recommended)
-- 5V power supply (sufficient for your LED count)
-- 220-470Ω resistor (for LED data line)
-- 470-1000µF capacitor (recommended for LED power)
-
-### Wiring Diagram
-```
-ESP32 GPIO8 (D8) --[220Ω]--→ LED Data In
-ESP32 GPIO7 (D7) → Button → GND
-ESP32 GND → LED GND → Power GND (common ground)
-Power 5V → LED 5V+
-
-Optional: 74AHCT125 level shifter for 5V LEDs
-```
-
-## Getting Started
-
-### Prerequisites
-- [PlatformIO](https://platformio.org/) installed (CLI or VS Code extension)
-- USB cable for programming
-- Microsoft 365 account for Teams presence
-
-### 1. Clone and Build
+Install PlatformIO, then from the project root:
 
 ```bash
-# Clone the repository
-git clone https://github.com/curtis8523/StatusGlow.git
-cd StatusGlow
-
-# Build for ESP32-C3 (default)
-pio run -e seeed_xiao_esp32c3
-
-# OR build for ESP32-S3
 pio run -e seeed_xiao_esp32s3
-
-# Upload
-pio run --target upload
+pio run -e seeed_xiao_esp32s3 -t upload
+pio run -e seeed_xiao_esp32s3 -t uploadfs
 ```
 
-### 2. Initial Setup
-
-1. **Power On**
-   - Device creates WiFi AP: `StatusGlow`
-   - Password: `presence`
-
-2. **Connect**
-   - Join the StatusGlow network
-   - Open `http://192.168.4.1` in browser
-
-3. **Configure** (Config page)
-   - Set WiFi credentials
-   - Enter Teams Client ID & Tenant ID
-   - Select LED type (RGB/RGBW)
-   - Set number of LEDs
-   - Save and reboot
-
-### 3. Microsoft Teams Integration
-
-#### Azure App Registration
-1. Go to [Azure Portal](https://portal.azure.com)
-2. Navigate to **Azure Active Directory** → **App registrations**
-3. Click **New registration**
-4. Set:
-   - Name: `StatusGlow`
-   - Redirect URI: `https://login.microsoftonline.com/common/oauth2/nativeclient`
-5. Under **API Permissions**, add:
-   - `Presence.Read` (Delegated)
-   - `User.Read` (Delegated)
-6. Grant admin consent
-7. Copy **Application (client) ID** and **Directory (tenant) ID**
-
-#### Device Login
-1. In StatusGlow Config page, click **Start device login**
-2. Copy the code displayed
-3. Visit [microsoft.com/devicelogin](https://microsoft.com/devicelogin)
-4. Enter code and sign in
-5. Device now polls Teams presence every 30s (configurable)
-
-## Usage Guide
-
-### Web Interface Pages
-
-#### Home
-- Current Teams status
-- System stats (CPU, memory, uptime)
-- WiFi signal strength
-- Quick status overview
-
-#### Config
-- Teams credentials (Client ID, Tenant)
-- WiFi settings (SSID, password, AP control)
-- LED type selection (RGB/RGBW)
-- Number of LEDs
-- **Reboot Device button**
-
-#### Effects
-- Per-status effect configuration
-- Effect selection (19 available)
-- Speed/duration slider (0-60s)
-- Color picker
-- Reverse direction toggle
-- Fade duration between effects
-- Global brightness
-- Gamma correction
-- Preview mode
-
-#### Logs
-- Real-time device logs
-- Auto-refresh toggle
-- Configurable log count
-- Timestamp display
-
-#### Firmware
-- OTA update interface
-- Upload .bin files
-- Progress indicator
-
-### Physical Button
-
-| Hold Duration | Action | LED Feedback |
-|--------------|--------|--------------|
-| < 3s | Test | Yellow (increasing) |
-| 3s | Reboot | Blue blinks 3× |
-| 8s | Factory Reset | Red blinks 5× |
-
-### API Endpoints
+Other environments:
 
 ```bash
-# Get system settings
-GET /api/settings
-
-# Update settings
-POST /api/settings
-Content-Type: application/json
-{"client_id": "...", "tenant": "...", "led_type_rgbw": false}
-
-# Get effects configuration
-GET /api/effects
-
-# Update effects
-POST /api/effects
-Content-Type: application/json
-{"profiles": [...]}
-
-# Reboot device
-POST /api/reboot
-
-# Get logs
-GET /api/logs?n=50
+pio run -e seeed_xiao_esp32c3 -t upload
+pio run -e waveshare_esp32s3_zero -t upload
 ```
 
-## Configuration
+`uploadfs` pushes the files in `data/` such as the logo and favicon.
 
-### platformio.ini
-```ini
-[env:seeed_xiao_esp32c3]
-build_flags =
-    -DNUMLEDS=16        ; Number of LEDs
-    -DDATAPIN=D8        ; LED data pin
+## First-Time Setup
+
+1. Flash firmware.
+2. Connect to the device AP.
+3. Open the web UI.
+4. Enter Wi-Fi and Microsoft app details.
+5. Start device login and complete the Microsoft sign-in flow.
+6. Save settings and reboot if prompted.
+
+### Access Point
+
+If the device does not have working Wi-Fi, it starts its own AP:
+
+- SSID: `StatusGlow-XXXXXX`
+- Password: `pageaz1986`
+- IP: `http://192.168.4.1`
+
+## Web UI Security
+
+Admin pages and management APIs are protected by a shared key. By default it matches the AP password:
+
+- Key: `pageaz1986`
+
+Open the UI with the key in the URL:
+
+```text
+http://192.168.4.1/?key=pageaz1986
 ```
 
-### src/config.h
-```cpp
-#define BUTTON_PIN 7                          // Button GPIO
-#define BUTTON_PRESS_TIME_MS 3000             // Reboot hold time
-#define BUTTON_FACTORY_RESET_TIME_MS 8000     // Factory reset time
-#define DEFAULT_LED_TYPE_RGBW false           // RGB (false) or RGBW (true)
-#define OTA_SHARED_KEY ""                     // OTA security key (optional)
-```
+The UI will carry that key to the other pages and API calls automatically.
 
-## Additional Documentation
+If you want to change the default, update `WIFI_INITIAL_AP_PASSWORD` / `ADMIN_SHARED_KEY` in [src/config.h](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/src/config.h).
 
-- [Button Usage Guide](BUTTON_USAGE.md) - Physical button functions and troubleshooting
-- [LED Type Switching](LED_TYPE_SWITCHING.md) - Runtime RGB/RGBW configuration
+## Microsoft Teams Setup
 
-## 🔧 Troubleshooting
+Create an app registration in Azure / Microsoft Entra and use device login.
 
-### LEDs don't light up
-- Check wiring (common ground, data pin, power)
-- Verify LED type setting matches your hardware (RGB vs RGBW)
-- Try lower LED count first (test with 1-5 LEDs)
-- Check power supply capacity
+Recommended app permissions:
 
-### WiFi won't connect
-- Verify SSID and password in Config
-- Check 2.4GHz network (ESP32 doesn't support 5GHz)
-- Try connecting to StatusGlow AP and reconfigure
+- `Presence.Read`
+- `User.Read`
 
-### Teams status not updating
-- Verify Client ID and Tenant ID correct
-- Complete device login process
-- Check internet connection
-- View Logs page for errors
+In the web UI Config page, provide:
 
-### Button not responding
-- Check GPIO7 to GND connection
-- Verify button wiring (momentary push button)
-- Check serial logs for "Button pressed" messages
+- Client ID
+- Tenant ID
 
-### Factory Reset
-If device becomes unresponsive:
-1. Hold button for 8+ seconds (LEDs show orange then red)
-2. OR use hardware reset button
-3. Device will clear all settings and restart as AP
+Then click `Start device login`, open the Microsoft device login page, and complete sign-in.
 
-## Contributing
+## Web UI Pages
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+- `Home`: current status, uptime, memory, Wi-Fi, and version
+- `Config`: Wi-Fi, Teams login settings, LED type, status LED, reboot, factory reset
+- `Effects`: per-status effect settings, brightness, gamma, fade, LED count, preview mode
+- `Logs`: recent device logs
+- `Firmware`: OTA upload and last OTA log
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
+## Main Config Files
+
+- [platformio.ini](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/platformio.ini): board environments, LED pin, LED count
+- [src/config.h](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/src/config.h): runtime defaults, AP password, admin key, status LED settings
+- [src/main.cpp](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/src/main.cpp): firmware logic and API routes
+- [src/request_handler.h](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/src/request_handler.h): embedded web UI
+- [src/spiffs_webserver.h](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/src/spiffs_webserver.h): SPIFFS helpers and upload endpoints
+
+## Common Tasks
+
+Change LED count or pin:
+
+- Edit `NUMLEDS` and `DATAPIN` in `platformio.ini`
+
+Switch between RGB and RGBW:
+
+- Use the Config page in the web UI
+
+Upload firmware OTA:
+
+- Open the Firmware page with the admin key in the URL
+- Upload the `.bin`
+
+Factory reset:
+
+- Use the Config page danger area
+
+## Troubleshooting
+
+LEDs do not respond:
+
+- Verify power, ground, and data wiring
+- Confirm the correct `DATAPIN`
+- Confirm RGB vs RGBW matches your strip
+- Try a small LED count first
+
+Cannot reach the UI:
+
+- Join the device AP and use `http://192.168.4.1/?key=pageaz1986`
+- If on normal Wi-Fi, find the device IP from serial output or your router
+
+Teams status does not update:
+
+- Recheck Client ID and Tenant ID
+- Complete device login again
+- Check the Logs page
+
+Assets like logo/favicon do not appear:
+
+- Run `pio run -e <env> -t uploadfs`
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Acknowledgments
-
-- Built with [PlatformIO](https://platformio.org/)
-- Uses [Adafruit NeoPixel](https://github.com/adafruit/Adafruit_NeoPixel) library
-- Uses [ArduinoJson](https://arduinojson.org/) library
-- Designed for [Seeed Studio XIAO ESP32](https://www.seeedstudio.com/XIAO-ESP32C3-p-5431.html) boards
-
-## Support
-
-For issues, questions, or suggestions:
-- Open an [Issue](https://github.com/curtis8523/StatusGlow/issues)
-- Check existing documentation
-- Review logs in web interface
-- Inspiration from ESPTeamsPresence project.
+MIT. See [LICENSE](/c:/Users/curti/OneDrive/Documents/Code/Teams/StatusGlow/LICENSE).
