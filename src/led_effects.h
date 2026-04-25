@@ -79,6 +79,7 @@ public:
     strip.updateLength(n);
     strip.clear();
     strip.show();
+    _needsRefresh = true;
     resizeAux();
   }
 
@@ -88,13 +89,19 @@ public:
     strip.updateType(type);
     strip.clear();
     strip.show();
+    _needsRefresh = true;
   }
 
   bool getPixelTypeRGBW() const { return _isRGBW; }
 
   uint16_t length() const { return _count; }
 
-  void setBrightness(uint8_t b) { strip.setBrightness(b); _bri = b; }
+  void setBrightness(uint8_t b) {
+    if (_bri == b) return;
+    strip.setBrightness(b);
+    _bri = b;
+    _needsRefresh = true;
+  }
   uint8_t getBrightness() const { return _bri; }
 
   void setSegment(uint8_t /*segment*/, uint16_t start, uint16_t end, uint16_t mode, uint32_t color, uint16_t speed, bool reverse) {
@@ -177,6 +184,7 @@ private:
   uint16_t _p_speed = 3000;
   bool _p_reverse = false;
   bool _hasPending = false;
+  bool _needsRefresh = true;
   unsigned long _startedMs = 0;
   unsigned long _lastFrameMs = 0;
   int _pos = 0; int _dir = 1; int _phase = 0;
@@ -263,8 +271,11 @@ private:
   }
 
   void renderFrame(bool force) {
+    if (!force && _mode == FX_MODE_STATIC && !_needsRefresh) return;
     unsigned long now = millis();
-    uint16_t frameMs = constrain(_speed / 50, 8, 50);
+    // Optimized for ESP32-S3: reduced minimum from 8ms to 4ms for smoother animations
+    // Maximum increased to 100ms to allow slower effects when desired
+    uint16_t frameMs = constrain(_speed / 50, 4, 100);
     if (!force && (now - _lastFrameMs) < frameMs) return;
     _lastFrameMs = now;
     switch (_mode) {
@@ -290,6 +301,7 @@ private:
       default: renderStatic(); break;
     }
     strip.show();
+    _needsRefresh = false;
   }
 
   void renderStatic() {

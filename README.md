@@ -8,14 +8,7 @@ A self-hosted, feature-rich presence indicator that displays your Microsoft Team
 
 ## ✨ Features
 
-
-<img width="1281" height="928" alt="Screenshot 2025-10-19 205620" src="https://github.com/user-attachments/assets/7475aaea-75f9-4e52-9cdd-87d1ecade3ec" />
-<img width="1280" height="636" alt="Screenshot 2025-10-19 205634" src="https://github.com/user-attachments/assets/2271db48-c16d-46fa-b4f5-e5498f2abbc5" />
-<img width="1256" height="993" alt="Screenshot 2025-10-19 205646" src="https://github.com/user-attachments/assets/f87d6df4-8496-4b3d-abc3-5b28d5bc72cb" />
-<img width="1265" height="817" alt="Screenshot 2025-10-19 205700" src="https://github.com/user-attachments/assets/8f7c4611-e0f4-4642-95ee-25c9c2feffef" />
-<img width="1259" height="544" alt="Screenshot 2025-10-19 205710" src="https://github.com/user-attachments/assets/d21f6fa0-f0da-4930-b58e-f02b6571ffa2" />
-
-### 🎨 LED Effects & Control
+### LED Effects & Control
 - **19 Smooth Effects**: Static, Breath, Fade, Scan, Dual Scan, Comet, Rainbow, Theater Chase, Color Wipe, Running Lights, Twinkle, Sparkle, Confetti, Fire Flicker, Filler Up, and more
 - **Runtime RGB/RGBW Switching**: Change between RGB (WS2812B) and RGBW (SK6812) LED types via web UI - no recompilation needed
 - **Smooth Animations**: Sub-pixel interpolation for buttery-smooth motion
@@ -24,14 +17,18 @@ A self-hosted, feature-rich presence indicator that displays your Microsoft Team
 - **Gamma Correction**: Adjustable for accurate color reproduction
 - **Brightness Control**: 0-255 with per-profile overrides
 
-### 🔧 Hardware Control
+### Hardware Control
 - **Physical Button** (GPIO7):
   - Hold 3s: Reboot device
   - Hold 8s: Factory reset
   - Visual LED feedback during press
+- **Status LED** (ESP32S3 only, GPIO21):
+  - Onboard WS2812 shows device state
+  - Toggle on/off in web UI
+  - See [STATUS_LED.md](STATUS_LED.md) for details
 - **Configurable Pins**: LED on GPIO8, Button on GPIO7
 
-### 🌐 Web Interface
+### Web Interface
 - **Modern UI**: Clean, responsive design
 - **Live Monitoring**: Real-time status, CPU/memory, WiFi signal
 - **Configuration**: Teams setup, WiFi, LED type, device control
@@ -39,16 +36,16 @@ A self-hosted, feature-rich presence indicator that displays your Microsoft Team
 - **Live Logs**: Real-time device logs with auto-refresh
 - **OTA Updates**: Firmware updates via web UI
 
-### 🔒 Security & Reliability
+### Security & Reliability
 - **Optional OTA Key**: Secure firmware updates
 - **Factory Reset**: Hardware button or API
 - **Persistent Settings**: Survives reboots
 - **Auto-Reconnect**: WiFi and Teams API resilience
 
-## 🛠️ Hardware Requirements
+## Hardware Requirements
 
 ### Supported Boards
-- **XIAO ESP32S3** (Recommended) - Dual-core, PSRAM, smoothest performance
+- **XIAO ESP32S3** (Recommended) - Dual-core, PSRAM, smoothest performance, includes onboard status LED
 - **XIAO ESP32C3** - Single-core RISC-V, great performance
 
 ### Components
@@ -69,7 +66,7 @@ Power 5V → LED 5V+
 Optional: 74AHCT125 level shifter for 5V LEDs
 ```
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 - [PlatformIO](https://platformio.org/) installed (CLI or VS Code extension)
@@ -80,7 +77,7 @@ Optional: 74AHCT125 level shifter for 5V LEDs
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/StatusGlow.git
+git clone https://github.com/curtis8523/StatusGlow.git
 cd StatusGlow
 
 # Build for ESP32-C3 (default)
@@ -132,7 +129,7 @@ pio run --target upload
 4. Enter code and sign in
 5. Device now polls Teams presence every 30s (configurable)
 
-## 📖 Usage Guide
+## Usage Guide
 
 ### Web Interface Pages
 
@@ -205,7 +202,7 @@ POST /api/reboot
 GET /api/logs?n=50
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 ### platformio.ini
 ```ini
@@ -224,7 +221,7 @@ build_flags =
 #define OTA_SHARED_KEY ""                     // OTA security key (optional)
 ```
 
-## 📚 Additional Documentation
+## Additional Documentation
 
 - [Button Usage Guide](BUTTON_USAGE.md) - Physical button functions and troubleshooting
 - [LED Type Switching](LED_TYPE_SWITCHING.md) - Runtime RGB/RGBW configuration
@@ -259,7 +256,7 @@ If device becomes unresponsive:
 2. OR use hardware reset button
 3. Device will clear all settings and restart as AP
 
-## 🤝 Contributing
+## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
@@ -269,24 +266,21 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
-## 📝 License
+## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Built with [PlatformIO](https://platformio.org/)
 - Uses [Adafruit NeoPixel](https://github.com/adafruit/Adafruit_NeoPixel) library
 - Uses [ArduinoJson](https://arduinojson.org/) library
 - Designed for [Seeed Studio XIAO ESP32](https://www.seeedstudio.com/XIAO-ESP32C3-p-5431.html) boards
 
-## 📧 Support
+## Support
 
 For issues, questions, or suggestions:
-- Open an [Issue](https://github.com/YOUR_USERNAME/StatusGlow/issues)
+- Open an [Issue](https://github.com/curtis8523/StatusGlow/issues)
 - Check existing documentation
 - Review logs in web interface
-
----
-
-**Made with ❤️ for remote workers**
+- Inspiration from ESPTeamsPresence project.
