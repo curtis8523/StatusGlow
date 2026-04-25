@@ -187,7 +187,7 @@ static inline void appendLiveTopBarAndScript(String &s) {
 // Requests to /
 void handleRoot() {
 	DBG_PRINTLN("handleRoot()");
-	// Serve page directly; captive portal behavior is not used.
+	// The main router handles captive-portal redirects before this page renders.
 
 	String s;
 	appendHeadWithStyles(s, "StatusGlow", ROOT_EXTRA_STYLE);

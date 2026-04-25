@@ -431,6 +431,72 @@ bool requireOtaAuth() {
 	return requireSharedKey(gOtaSharedKey.c_str(), "ota");
 }
 
+static String urlEncode(const String& in) {
+	String out;
+	out.reserve(in.length() * 3);
+	for (size_t i = 0; i < in.length(); ++i) {
+		const unsigned char c = (unsigned char)in.charAt(i);
+		const bool safe =
+			(c >= 'A' && c <= 'Z') ||
+			(c >= 'a' && c <= 'z') ||
+			(c >= '0' && c <= '9') ||
+			c == '-' || c == '_' || c == '.' || c == '~';
+		if (safe) {
+			out += (char)c;
+		} else {
+			char buf[4];
+			snprintf(buf, sizeof(buf), "%%%02X", c);
+			out += buf;
+		}
+	}
+	return out;
+}
+
+static String normalizedHostHeader(String host) {
+	host.trim();
+	const int colon = host.indexOf(':');
+	if (colon >= 0) host.remove(colon);
+	host.toLowerCase();
+	return host;
+}
+
+static bool isCaptivePortalLocalHost(const String& host) {
+	if (host.length() == 0) return false;
+	if (host == F("localhost")) return true;
+	if (host == WiFi.softAPIP().toString()) return true;
+	if (host == gThingHostName) return true;
+	if (host == (gThingHostName + F(".local"))) return true;
+	return false;
+}
+
+static String getCaptivePortalUrl() {
+	String url = String(F("http://")) + WiFi.softAPIP().toString() + F("/config");
+	if (gAdminSharedKey.length() > 0) {
+		url += F("?key=");
+		url += urlEncode(gAdminSharedKey);
+	}
+	return url;
+}
+
+static bool shouldRedirectToCaptivePortal() {
+	if (!gApEnabled) return false;
+	return !isCaptivePortalLocalHost(normalizedHostHeader(server.hostHeader()));
+}
+
+static void redirectToCaptivePortal() {
+	const String portalUrl = getCaptivePortalUrl();
+	server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+	server.sendHeader("Pragma", "no-cache");
+	server.sendHeader("Expires", "0");
+	server.sendHeader("Location", portalUrl, true);
+	server.send(302, "text/plain; charset=utf-8", String(F("Redirecting to ")) + portalUrl);
+}
+
+static void handleCaptivePortalRequest() {
+	addLogf("Captive portal redirect: %s host=%s", server.uri().c_str(), server.hostHeader().c_str());
+	redirectToCaptivePortal();
+}
+
 static String withSuffixWithinLimit(const String& base, const String& suffix, size_t maxLen) {
 	const size_t suffixOverhead = 1 + suffix.length();
 	if (maxLen <= suffixOverhead) return suffix;
@@ -483,6 +549,7 @@ static void startSoftAPIfNeeded() {
 		WiFi.softAPConfig(local_IP, gateway, subnet);
 		
 		WiFi.softAP(gApSsid.c_str(), gWifiInitialApPassword.c_str(), 1, 0, 4);
+		dnsServer.start(53, "*", local_IP);
 		delay(500);
 		
 		gApEnabled = true;
@@ -493,6 +560,7 @@ static void startSoftAPIfNeeded() {
 
 static void stopSoftAPIfActive() {
 	if (gApEnabled) {
+		dnsServer.stop();
 		WiFi.softAPdisconnect(true);
 		delay(100);
 		
@@ -1228,7 +1296,21 @@ void setup()
 	if (strlen(paramPollIntervalValue) == 0) {
 		strlcpy(paramPollIntervalValue, DEFAULT_POLLING_PRESENCE_INTERVAL, sizeof(paramPollIntervalValue));
 	}
+	server.on("/generate_204", HTTP_GET, handleCaptivePortalRequest);
+	server.on("/gen_204", HTTP_GET, handleCaptivePortalRequest);
+	server.on("/hotspot-detect.html", HTTP_GET, handleCaptivePortalRequest);
+	server.on("/library/test/success.html", HTTP_GET, handleCaptivePortalRequest);
+	server.on("/success.txt", HTTP_GET, handleCaptivePortalRequest);
+	server.on("/ncsi.txt", HTTP_GET, handleCaptivePortalRequest);
+	server.on("/connecttest.txt", HTTP_GET, handleCaptivePortalRequest);
+	server.on("/redirect", HTTP_GET, handleCaptivePortalRequest);
+	server.on("/fwlink", HTTP_GET, handleCaptivePortalRequest);
+	server.on("/canonical.html", HTTP_GET, handleCaptivePortalRequest);
 	server.on("/", HTTP_GET, [] {
+		if (gApEnabled && !isAdminRequestAuthorized()) {
+			redirectToCaptivePortal();
+			return;
+		}
 		if (!requireAdminAuth()) return;
 		handleRoot();
 	});
@@ -1250,6 +1332,10 @@ void setup()
 		server.send(200, "text/plain; charset=utf-8", s);
 	});
 	server.on("/config", HTTP_GET, [] {
+		if (gApEnabled && !isAdminRequestAuthorized()) {
+			redirectToCaptivePortal();
+			return;
+		}
 		if (!requireAdminAuth()) return;
 		handleConfigUi();
 	});
@@ -1600,6 +1686,10 @@ void setup()
 			handleEffectsUi();
 		});
 	server.onNotFound([]() {
+		if (shouldRedirectToCaptivePortal()) {
+			handleCaptivePortalRequest();
+			return;
+		}
 		if (!handleFileRead(server.uri())) {
 			server.send(404, "text/plain", "FileNotFound");
 		}
@@ -1688,6 +1778,7 @@ void updateStatusLed() {
 
 void loop()
 {
+	if (gApEnabled) dnsServer.processNextRequest();
 	server.handleClient();
 	statemachine();
 	updateStatusLed();

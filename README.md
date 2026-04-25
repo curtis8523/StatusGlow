@@ -48,7 +48,7 @@ pio run -e waveshare_esp32s3_zero -t upload
 
 1. Flash firmware.
 2. Connect to the device AP.
-3. Open the web UI.
+3. The captive portal should open the Config page automatically. If it does not, open `http://192.168.4.1/?key=statusglow-xxxx`.
 4. Enter Wi-Fi and Microsoft app details.
 5. Start device login and complete the Microsoft sign-in flow.
 6. Save settings and reboot if prompted.
@@ -60,6 +60,8 @@ If the device does not have working Wi-Fi, it starts its own AP:
 - SSID: `StatusGlow-XXXX`
 - Password: `statusglow-xxxx`
 - IP: `http://192.168.4.1`
+
+When you join that AP, the device also runs a captive portal and redirects common phone/laptop Wi-Fi setup checks to the local Config page.
 
 `XXXX` is the last two octets of the device MAC address in hex. The same suffix is also added to the device hostname, so the device will show up with a matching name like `statusglow-ab12.local`.
 
