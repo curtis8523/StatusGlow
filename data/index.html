@@ -230,6 +230,16 @@
             <div class="hint mt-s">Device will reboot automatically after a successful update.</div>
             <div id="fw-status" class="mt-s muted-line"></div>
           </section>
+
+          <section class="mt">
+            <h3>Upload filesystem image</h3>
+            <form id="fw-fs-form" method="POST" action="/updatefs" enctype="multipart/form-data">
+              <input type="file" name="filesystem" accept=".bin,.bin.gz" required>
+              <button class="btn" type="submit">Upload Filesystem</button>
+            </form>
+            <div class="hint mt-s">Use this after frontend changes to update the SPIFFS web UI assets.</div>
+            <div id="fw-fs-status" class="mt-s muted-line"></div>
+          </section>
         </div>
 
         <dialog id="fw-ota-dialog">

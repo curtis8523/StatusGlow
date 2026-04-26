@@ -69,6 +69,7 @@ static void removePrefsKey(const char* key);
 static void removeLegacyAppConfigFilesIfPresent();
 static void removeLegacyContextFileIfPresent();
 void onWifiConnected();
+void updateStatusLed();
 
 // NeoPixel strip / effects engine
 // Note: Compiled to support both RGB and RGBW, switchable at runtime
@@ -177,21 +178,21 @@ struct EffectProfile {
 
 // Default effect profiles for common Teams activities
 EffectProfile gProfiles[] = {
-	{"Available",         GREEN,           FX_MODE_STATIC,      3000, false, 0, 0},
-	{"Away",              YELLOW,          FX_MODE_STATIC,      3000, false, 0, 0},
-	{"BeRightBack",       ORANGE,          FX_MODE_STATIC,      3000, false, 0, 0},
-	{"Busy",              PURPLE,          FX_MODE_STATIC,      3000, false, 0, 0},
-	{"DoNotDisturb",      PINK,            FX_MODE_STATIC,      3000, false, 0, 0},
-	{"UrgentInterruptionsOnly", PINK,      FX_MODE_STATIC,      3000, false, 0, 0},
-	{"InACall",           RED,             FX_MODE_BREATH,      3000, false, 0, 0},
-	{"InAConferenceCall", RED,             FX_MODE_BREATH,      9000, false, 0, 0},
+	{"Available",         GREEN,           FX_MODE_STATIC,         3000, false, 0, 0},
+	{"Away",              YELLOW,          FX_MODE_BREATH,         4800, false, 0, 0},
+	{"BeRightBack",       ORANGE,          FX_MODE_BREATH,         3200, false, 0, 0},
+	{"Busy",              PURPLE,          FX_MODE_BREATH,         2600, false, 0, 0},
+	{"DoNotDisturb",      PINK,            FX_MODE_BREATH,         1900, false, 0, 0},
+	{"UrgentInterruptionsOnly", PINK,      FX_MODE_BREATH,         1400, false, 0, 0},
+	{"InACall",           RED,             FX_MODE_DUAL_SCAN,      3800, false, 0, 0},
+	{"InAConferenceCall", RED,             FX_MODE_RUNNING_LIGHTS, 4600, false, 0, 0},
 	{"Inactive",          0,               FX_MODE_BREATH,      3000, false, 0, 0},
-	{"InAMeeting",        RED,             FX_MODE_SCAN,        3000, false, 0, 0},
+	{"InAMeeting",        RED,             FX_MODE_COMET,          4200, false, 0, 0},
 	{"Offline",           BLACK,           FX_MODE_STATIC,      3000, false, 0, 0},
 	{"OffWork",           BLACK,           FX_MODE_STATIC,      3000, false, 0, 0},
 	{"OutOfOffice",       BLACK,           FX_MODE_STATIC,      3000, false, 0, 0},
 	{"PresenceUnknown",   BLACK,           FX_MODE_STATIC,      3000, false, 0, 0},
-	{"Presenting",        RED,             FX_MODE_COLOR_WIPE,  3000, false, 0, 0},
+	{"Presenting",        RED,             FX_MODE_RUNNING_LIGHTS, 5200, false, 0, 0},
 };
 
 EffectProfile* findProfile(const String& k) {
@@ -1294,6 +1295,33 @@ static void serveNoContent() {
 	server.send(204);
 }
 
+static void beginOtaVisuals() {
+	EFFECTS_LOCK();
+	effects.setBrightness(200);
+	effects.setSegment(0, 0, numberLeds, FX_MODE_STATIC, BLACK, 0, false);
+	effects.strip.clear();
+	effects.strip.setPixelColor(0, effects.Color(255, 255, 255));
+	effects.strip.show();
+	EFFECTS_UNLOCK();
+}
+
+static String buildOtaUploadPage(const char* actionPath, const char* inputName, const char* title) {
+	String page;
+	page.reserve(512);
+	page += F("<!DOCTYPE html><html><body><h1>");
+	page += title;
+	page += F("</h1><form method='POST' action='");
+	page += actionPath;
+	page += F("' enctype='multipart/form-data'><input type='file' name='");
+	page += inputName;
+	page += F("'>");
+	if (server.hasArg("key")) {
+		page += String("<input type='hidden' name='key' value='") + server.arg("key") + "'>";
+	}
+	page += F("<input type='submit' value='Upload'></form></body></html>");
+	return page;
+}
+
 // Neopixel control
 void setAnimation(uint8_t segment, uint8_t mode = FX_MODE_STATIC, uint32_t color = RED, uint16_t speed = 3000, bool reverse = false) {
 	uint16_t startLed = 0, endLed = 0;
@@ -1310,8 +1338,9 @@ void setAnimation(uint8_t segment, uint8_t mode = FX_MODE_STATIC, uint32_t color
 			
 			// Check if we're already showing this exact animation
 			if (gTarget.initialized) {
-				bool sameTarget = (gTarget.mode == mode) && (gTarget.color == color) && 
-				                  (gTarget.speed == speed) && (gTarget.reverse == reverse);
+				bool sameTarget = (gTarget.mode == mode) && (gTarget.color == color) &&
+				                  (gTarget.speed == speed) && (gTarget.reverse == reverse) &&
+				                  (gTarget.targetBri == targetBri);
 				if (sameTarget && !gFade.active) {
 					// Already at target and not fading, nothing to do
 					EFFECTS_UNLOCK();
@@ -1320,8 +1349,9 @@ void setAnimation(uint8_t segment, uint8_t mode = FX_MODE_STATIC, uint32_t color
 				
 				// Check if we're already fading to this exact animation
 				if (gFade.active && gFade.phaseOut) {
-					bool samePending = (gFade.pendingMode == mode) && (gFade.pendingColor == color) && 
-					                   (gFade.pendingSpeed == speed) && (gFade.pendingReverse == reverse);
+					bool samePending = (gFade.pendingMode == mode) && (gFade.pendingColor == color) &&
+					                   (gFade.pendingSpeed == speed) && (gFade.pendingReverse == reverse) &&
+					                   (gFade.originalBri == targetBri);
 					if (samePending) {
 						// Already fading to this target, don't interrupt
 						EFFECTS_UNLOCK();
@@ -1351,13 +1381,9 @@ void setAnimation(uint8_t segment, uint8_t mode = FX_MODE_STATIC, uint32_t color
 				startFade(currentBri, 0, (gFade.durationMs == 0 ? gFadeDurationMs : gFade.durationMs) / 2);
 			} else {
 				// No fade, immediate transition
-				if (mode == FX_MODE_STATIC) {
-					effects.setBrightness(targetBri);
-					effects.setSegment(segment, startLed, endLed, mode, color, speed, reverse);
-					effects.trigger();
-				} else {
-					effects.setSegment(segment, startLed, endLed, mode, color, speed, reverse);
-				}
+				effects.setBrightness(targetBri);
+				effects.setSegment(segment, startLed, endLed, mode, color, speed, reverse);
+				effects.trigger();
 			}
 			EFFECTS_UNLOCK();
 }
@@ -1382,30 +1408,32 @@ void setPresenceAnimation() {
 	if (activity.equals("Inactive")) {
 	    tMode = FX_MODE_STATIC; tColor = BLACK;
 	} else if (activity.equals("Presenting")) {
-			tMode = FX_MODE_COLOR_WIPE; tColor = RED;
+			tMode = FX_MODE_RUNNING_LIGHTS; tColor = RED; tSpeed = 5200;
 		} else if (activity.equals("InAMeeting")) {
-			tMode = FX_MODE_SCAN; tColor = RED;
+			tMode = FX_MODE_COMET; tColor = RED; tSpeed = 4200;
+		} else if (activity.equals("InAConferenceCall")) {
+			tMode = FX_MODE_RUNNING_LIGHTS; tColor = RED; tSpeed = 4600;
 		} else if (activity.equals("InACall")) {
-			tMode = FX_MODE_BREATH; tColor = RED;
+			tMode = FX_MODE_DUAL_SCAN; tColor = RED; tSpeed = 3800;
 		} else if (activity.equals("Offline") || activity.equals("OffWork") || activity.equals("OutOfOffice") || activity.equals("PresenceUnknown")) {
 			tMode = FX_MODE_STATIC; tColor = BLACK;
 		} else if (activity.equals("DoNotDisturb") || activity.equals("UrgentInterruptionsOnly")) {
-			tMode = FX_MODE_STATIC; tColor = PINK;
+			tMode = FX_MODE_BREATH; tColor = PINK; tSpeed = activity.equals("UrgentInterruptionsOnly") ? 1400 : 1900;
 		} else if (activity.equals("Busy")) {
-			tMode = FX_MODE_STATIC; tColor = PURPLE;
+			tMode = FX_MODE_BREATH; tColor = PURPLE; tSpeed = 2600;
 		} else if (activity.equals("BeRightBack")) {
-			tMode = FX_MODE_STATIC; tColor = ORANGE;
+			tMode = FX_MODE_BREATH; tColor = ORANGE; tSpeed = 3200;
 		} else if (activity.equals("Away")) {
-			tMode = FX_MODE_STATIC; tColor = YELLOW;
+			tMode = FX_MODE_BREATH; tColor = YELLOW; tSpeed = 4800;
 		} else if (activity.equals("Available")) {
 			tMode = FX_MODE_STATIC; tColor = GREEN;
 		}
 	}
 	if (gTarget.initialized) {
-		bool sameTarget = (gTarget.mode == tMode) && (gTarget.color == tColor) && (gTarget.speed == tSpeed) && (gTarget.reverse == tReverse);
+		bool sameTarget = (gTarget.mode == tMode) && (gTarget.color == tColor) && (gTarget.speed == tSpeed) && (gTarget.reverse == tReverse) && (gTarget.targetBri == perBri);
 		if (sameTarget) return;
 		if (gFade.active && gFade.phaseOut) {
-			bool samePending = (gFade.pendingMode == tMode) && (gFade.pendingColor == tColor) && (gFade.pendingSpeed == tSpeed) && (gFade.pendingReverse == tReverse);
+			bool samePending = (gFade.pendingMode == tMode) && (gFade.pendingColor == tColor) && (gFade.pendingSpeed == tSpeed) && (gFade.pendingReverse == tReverse) && (gFade.originalBri == perBri);
 			if (samePending) return;
 		}
 	}
@@ -1654,7 +1682,7 @@ void neopixelTask(void * parameter) {
 		EFFECTS_LOCK();
 		updateFade();
 		effects.service();
-		if (!gFade.active && gTarget.initialized && gTarget.mode == FX_MODE_STATIC) {
+		if (!gFade.active && gTarget.initialized) {
 			uint8_t cur = effects.getBrightness();
 			if (cur != gTarget.targetBri) {
 				effects.setBrightness(gTarget.targetBri);
@@ -1668,8 +1696,14 @@ void neopixelTask(void * parameter) {
 
 void appTask(void * parameter) {
 	for (;;) {
+		if (gApEnabled) dnsServer.processNextRequest();
+		processWifiConnectJob();
+		processWifiScanJob();
+		server.handleClient();
+		processPendingSoftAPStop();
+		updateStatusLed();
 		statemachine();
-		vTaskDelay(25 / portTICK_PERIOD_MS);
+		vTaskDelay(15 / portTICK_PERIOD_MS);
 	}
 }
 
@@ -1775,11 +1809,7 @@ void setup()
 	server.on("/update", HTTP_GET, []() {
 		if (!requireOtaAuth()) { otaLog("OTA GET /update unauthorized"); return; }
 		otaLog("OTA GET /update page served");
-		String page = F("<!DOCTYPE html><html><body><form method='POST' action='/update' enctype='multipart/form-data'><input type='file' name='firmware'>");
-		if (server.hasArg("key")) {
-			page += String("<input type='hidden' name='key' value='") + server.arg("key") + "'>";
-		}
-		page += F("<input type='submit' value='Update'></form></body></html>");
+		String page = buildOtaUploadPage("/update", "firmware", "Firmware OTA");
 		server.send(200, "text/html", page);
 	});
 	server.on("/update", HTTP_POST,
@@ -1798,13 +1828,7 @@ void setup()
 			if (upload.status == UPLOAD_FILE_START) {
 				gOtaLog = String();
 				otaLogf("OTA start: %s size=%u", upload.filename.c_str(), (unsigned)upload.totalSize);
-				EFFECTS_LOCK();
-				effects.setBrightness(200);
-				effects.setSegment(0, 0, numberLeds, FX_MODE_STATIC, BLACK, 0, false);
-				effects.strip.clear();
-				effects.strip.setPixelColor(0, effects.Color(255, 255, 255));
-				effects.strip.show();
-				EFFECTS_UNLOCK();
+				beginOtaVisuals();
 				// Some clients send multipart with unknown total size (chunked), handle that gracefully
 				size_t total = upload.totalSize;
 				bool beginOk = (total > 0) ? Update.begin(total) : Update.begin(UPDATE_SIZE_UNKNOWN);
@@ -1835,6 +1859,64 @@ void setup()
 					otaLogf("OTA end OK, size=%u", (unsigned)upload.totalSize);
 				} else {
 					otaLog("OTA end failed");
+					Update.printError(Serial);
+				}
+				otaLogSaveToFile();
+			}
+		}
+	);
+	server.on("/updatefs", HTTP_GET, []() {
+		if (!requireOtaAuth()) { otaLog("OTA GET /updatefs unauthorized"); return; }
+		otaLog("OTA GET /updatefs page served");
+		String page = buildOtaUploadPage("/updatefs", "filesystem", "Filesystem OTA");
+		server.send(200, "text/html", page);
+	});
+	server.on("/updatefs", HTTP_POST,
+		[]() {
+			if (!requireOtaAuth()) { otaLog("OTA POST /updatefs unauthorized"); return; }
+			bool ok = !Update.hasError();
+			otaLogf("Filesystem OTA finalize: %s", ok ? "OK" : "FAIL");
+			server.send(200, "text/plain", ok ? "OK" : "FAIL");
+			delay(200);
+			if (ok) ESP.restart();
+		},
+		[]() {
+			if (!isRequestAuthorized(gOtaSharedKey.c_str())) { otaLog("Filesystem OTA unauthorized (chunk)"); return; }
+			HTTPUpload &upload = server.upload();
+			static size_t s_fs_total = 0; static size_t s_fs_written = 0; static int s_fs_milestone = 0;
+			if (upload.status == UPLOAD_FILE_START) {
+				gOtaLog = String();
+				otaLogf("Filesystem OTA start: %s size=%u", upload.filename.c_str(), (unsigned)upload.totalSize);
+				beginOtaVisuals();
+				size_t total = upload.totalSize;
+				bool beginOk = (total > 0) ? Update.begin(total, U_SPIFFS) : Update.begin(UPDATE_SIZE_UNKNOWN, U_SPIFFS);
+				if (!beginOk) {
+					otaLog("Filesystem OTA begin failed");
+					Update.printError(Serial);
+				}
+				s_fs_total = total; s_fs_written = 0; s_fs_milestone = 0;
+			} else if (upload.status == UPLOAD_FILE_WRITE) {
+				size_t wrote = Update.write(upload.buf, upload.currentSize);
+				if (wrote != upload.currentSize) {
+					otaLogf("Filesystem OTA write mismatch: wrote %u of %u", (unsigned)wrote, (unsigned)upload.currentSize);
+				}
+				s_fs_written += upload.currentSize;
+				if (s_fs_total > 0) {
+					int pct = (int)((s_fs_written * 100) / s_fs_total);
+					int target = (s_fs_milestone + 1) * 25;
+					if (target <= 75 && pct >= target) { otaLogf("Filesystem OTA progress: %d%%", target); s_fs_milestone++; }
+				}
+				static bool t = false; t = !t;
+				EFFECTS_LOCK();
+				effects.strip.setPixelColor(0, t ? effects.Color(255,255,255) : effects.Color(0,0,0));
+				effects.strip.show();
+				EFFECTS_UNLOCK();
+			} else if (upload.status == UPLOAD_FILE_END) {
+				bool ok = Update.end(true);
+				if (ok) {
+					otaLogf("Filesystem OTA end OK, size=%u", (unsigned)upload.totalSize);
+				} else {
+					otaLog("Filesystem OTA end failed");
 					Update.printError(Serial);
 				}
 				otaLogSaveToFile();
@@ -2168,6 +2250,11 @@ void setup()
 				}
 			}
 			saveEffectsConfig();
+			if (gPreviewMode) {
+				applyPreviewSelection();
+			} else {
+				setPresenceAnimation();
+			}
 			sendApiOk(200);
 		});
 		server.on("/api/preview", HTTP_POST, [] {
@@ -2384,10 +2471,5 @@ void updateStatusLed() {
 
 void loop()
 {
-	if (gApEnabled) dnsServer.processNextRequest();
-	processWifiConnectJob();
-	processWifiScanJob();
-	server.handleClient();
-	processPendingSoftAPStop();
-	updateStatusLed();
+	vTaskDelay(250 / portTICK_PERIOD_MS);
 }

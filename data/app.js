@@ -1006,18 +1006,17 @@
     if (APP.initialized.fw) return;
     APP.initialized.fw = true;
 
-    const form = $("fw-form");
-    ensureHiddenKey(form);
-    form.addEventListener("submit", async function (event) {
+    async function handleOtaSubmit(event, formId, route, statusId, successMessage) {
       event.preventDefault();
-      const status = $("fw-status");
+      const form = $(formId);
+      const status = $(statusId);
       safeText(status, "Uploading...");
       const body = new FormData(form);
       try {
-        const response = await authFetch("/update", { method: "POST", body: body });
+        const response = await authFetch(route, { method: "POST", body: body });
         const text = await response.text();
         if ((text || "").indexOf("OK") >= 0) {
-          safeText(status, "Upload complete. Rebooting...");
+          safeText(status, successMessage);
           setTimeout(function () { window.location.reload(); }, 5000);
         } else {
           safeText(status, "Update failed: " + text);
@@ -1025,6 +1024,18 @@
       } catch (err) {
         safeText(status, "Upload error: " + err.message);
       }
+    }
+
+    const form = $("fw-form");
+    ensureHiddenKey(form);
+    form.addEventListener("submit", function (event) {
+      handleOtaSubmit(event, "fw-form", "/update", "fw-status", "Firmware upload complete. Rebooting...");
+    });
+
+    const fsForm = $("fw-fs-form");
+    ensureHiddenKey(fsForm);
+    fsForm.addEventListener("submit", function (event) {
+      handleOtaSubmit(event, "fw-fs-form", "/updatefs", "fw-fs-status", "Filesystem upload complete. Rebooting...");
     });
 
     $("fw-view-ota-btn").addEventListener("click", async function () {

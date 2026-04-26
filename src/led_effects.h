@@ -68,6 +68,7 @@ public:
 
   void init() {
     strip.begin();
+    strip.setBrightness(255);
     strip.clear();
     strip.show();
   }
@@ -77,6 +78,7 @@ public:
   void setLength(uint16_t n) {
     _count = n;
     strip.updateLength(n);
+    strip.setBrightness(255);
     strip.clear();
     strip.show();
     _needsRefresh = true;
@@ -87,6 +89,7 @@ public:
     _isRGBW = isRGBW;
     neoPixelType type = isRGBW ? (NEO_GRBW + NEO_KHZ800) : (NEO_GRB + NEO_KHZ800);
     strip.updateType(type);
+    strip.setBrightness(255);
     strip.clear();
     strip.show();
     _needsRefresh = true;
@@ -98,7 +101,6 @@ public:
 
   void setBrightness(uint8_t b) {
     if (_bri == b) return;
-    strip.setBrightness(b);
     _bri = b;
     _needsRefresh = true;
   }
@@ -171,7 +173,7 @@ public:
 
 private:
   uint16_t _count = 0;
-  uint8_t _bri = 128;
+  uint8_t _bri = 255;
   bool _isRGBW = false;          // Track current LED type (RGB vs RGBW)
   uint16_t _segStart = 0, _segEnd = 0;
   EffectMode _mode = FX_MODE_STATIC;
@@ -204,10 +206,13 @@ private:
   }
 
   void fillSeg(uint32_t c) {
-    for (uint16_t i = _segStart; i < _segEnd; i++) strip.setPixelColor(i, c);
+    for (uint16_t i = _segStart; i < _segEnd; i++) setPixelColorScaled(i, c);
   }
 
   uint32_t scaleColor(uint32_t c, float f) {
+    f *= ((float)_bri / 255.0f);
+    if (f <= 0.0f) return 0;
+    if (f > 1.0f) f = 1.0f;
     uint8_t r = (c >> 16) & 0xFF;
     uint8_t g = (c >> 8) & 0xFF;
     uint8_t b = c & 0xFF;
@@ -261,6 +266,10 @@ private:
     }
   }
 
+  inline void setPixelColorScaled(uint16_t p, uint32_t c) {
+    strip.setPixelColor(p, scaleColor(c, 1.0f));
+  }
+
   inline void setPixelScaled(uint16_t p, float f, uint32_t c) {
     if (p >= _segStart && p < _segEnd) {
       if (f <= 0.0f) return;
@@ -270,12 +279,60 @@ private:
     }
   }
 
+  inline void addPixelScaled(uint16_t p, float f, uint32_t c) {
+    if (p < _segStart || p >= _segEnd || f <= 0.0f) return;
+    uint32_t sc = scaleColor(c, f);
+    uint32_t cur = strip.getPixelColor(p);
+    uint16_t r = ((cur >> 16) & 0xFF) + ((sc >> 16) & 0xFF);
+    uint16_t g = ((cur >> 8) & 0xFF) + ((sc >> 8) & 0xFF);
+    uint16_t b = (cur & 0xFF) + (sc & 0xFF);
+    if (_isRGBW) {
+      uint16_t w = ((cur >> 24) & 0xFF) + ((sc >> 24) & 0xFF);
+      strip.setPixelColor(p, Color(min<uint16_t>(r, 255), min<uint16_t>(g, 255), min<uint16_t>(b, 255), min<uint16_t>(w, 255)));
+    } else {
+      strip.setPixelColor(p, Color(min<uint16_t>(r, 255), min<uint16_t>(g, 255), min<uint16_t>(b, 255)));
+    }
+  }
+
+  void renderSoftDot(float pos, uint32_t color, float radius, bool additive = true, float intensity = 1.0f) {
+    if (radius <= 0.0f || segLen() == 0) return;
+    int start = max<int>(0, (int)floorf(pos - radius));
+    int end = min<int>((int)segLen() - 1, (int)ceilf(pos + radius));
+    for (int i = start; i <= end; i++) {
+      float dist = fabsf(pos - (float)i);
+      float f = 1.0f - (dist / radius);
+      if (f <= 0.0f) continue;
+      f = f * f;
+      f *= intensity;
+      uint16_t p = _segStart + (uint16_t)i;
+      if (additive) addPixelScaled(p, f, color);
+      else setPixelScaled(p, f, color);
+    }
+  }
+
+  uint16_t getFrameIntervalMs() const {
+    switch (_mode) {
+      case FX_MODE_STATIC:
+        return 1000;
+      case FX_MODE_BLINK:
+        return constrain(_speed / 12, 20, 80);
+      case FX_MODE_COLOR_WIPE:
+      case FX_MODE_COLOR_WIPE_INVERSE:
+      case FX_MODE_COLOR_WIPE_RANDOM:
+      case FX_MODE_THEATER_CHASE:
+      case FX_MODE_FILLER_UP: {
+        uint16_t n = max<uint16_t>(segLen(), 1);
+        return constrain(_speed / max<uint16_t>(n * 6, 1), 6, 24);
+      }
+      default:
+        return constrain(_speed / 240, 4, 16);
+    }
+  }
+
   void renderFrame(bool force) {
     if (!force && _mode == FX_MODE_STATIC && !_needsRefresh) return;
     unsigned long now = millis();
-    // Optimized for ESP32-S3: reduced minimum from 8ms to 4ms for smoother animations
-    // Maximum increased to 100ms to allow slower effects when desired
-    uint16_t frameMs = constrain(_speed / 50, 4, 100);
+    uint16_t frameMs = getFrameIntervalMs();
     if (!force && (now - _lastFrameMs) < frameMs) return;
     _lastFrameMs = now;
     switch (_mode) {
@@ -311,12 +368,11 @@ private:
   void renderBreath(unsigned long now) {
     float period = max<uint16_t>(_speed, 1000);
     float t = (float)((now - _startedMs) % (unsigned long)period) / period;
-    // Smooth breathing with ease-in-out: goes from dim to bright and back
-    float s = sinf((t - 0.25f) * 6.28318f); // sin(2*PI*t), shifted to start at minimum
-    float f = (s + 1.0f) * 0.5f; // Map [-1,1] to [0,1]
-    f = f * f; // Square for more dramatic dim-to-bright curve
-    uint32_t c = scaleColor(_color, f);
-    fillSeg(c);
+    float s = (cosf(t * 6.28318f) * -0.5f) + 0.5f;
+    float eased = s * s * (3.0f - 2.0f * s);
+    float f = 0.14f + (0.86f * eased);
+    clearSeg();
+    for (uint16_t i = _segStart; i < _segEnd; i++) setPixelScaled(i, f, _color);
   }
 
   void renderColorWipe(unsigned long now, bool inverse=false) {
@@ -329,7 +385,7 @@ private:
     int limit = min<int>(idx, n);
     for (int i = 0; i < limit; i++) {
       uint16_t p = _segStart + ((inverse ^ _reverse) ? (n - 1 - i) : i);
-      strip.setPixelColor(p, _color);
+      setPixelColorScaled(p, _color);
     }
   }
 
@@ -341,7 +397,9 @@ private:
     for (uint16_t i = 0; i < n; i++) {
       uint16_t j = _reverse ? (n - 1 - i) : i;
       if ((j + offset) % 3 == 0) {
-        strip.setPixelColor(_segStart + i, _color);
+        setPixelColorScaled(_segStart + i, _color);
+      } else if ((j + offset + 1) % 3 == 0) {
+        setPixelScaled(_segStart + i, 0.18f, _color);
       }
     }
   }
@@ -349,42 +407,27 @@ private:
   void renderScan(unsigned long now) {
     uint16_t n = segLen(); if (n < 1) return;
     clearSeg();
-    if (n == 1) { strip.setPixelColor(_segStart, _color); return; }
+    if (n == 1) { setPixelColorScaled(_segStart, _color); return; }
     float period = (float)max<uint16_t>(_speed, 300);
     float path = (float)(2 * (int)n - 2);
     float t = fmodf(((now - _startedMs) % (unsigned long)period) / period * path, path);
     float pos = (t <= (n - 1)) ? t : (2 * (n - 1) - t);
     if (_reverse) pos = (n - 1) - pos;
-    int i0 = (int)floorf(pos);
-    float frac = pos - i0;
-    uint16_t p0 = _segStart + i0;
-    uint16_t p1 = _segStart + min<uint16_t>(i0 + 1, n - 1);
-    setPixelScaled(p0, 1.0f - frac, _color);
-    if (p1 != p0) setPixelScaled(p1, frac, _color);
+    renderSoftDot(pos, _color, 3.4f, false);
   }
 
   void renderDualScan(unsigned long now) {
     uint16_t n = segLen(); if (n < 1) return;
     clearSeg();
-    if (n == 1) { strip.setPixelColor(_segStart, _color); return; }
+    if (n == 1) { setPixelColorScaled(_segStart, _color); return; }
     float period = (float)max<uint16_t>(_speed, 300);
     float path = (float)(2 * (int)n - 2);
     float t = fmodf(((now - _startedMs) % (unsigned long)period) / period * path, path);
     float pos = (t <= (n - 1)) ? t : (2 * (n - 1) - t);
     float posA = _reverse ? ((n - 1) - pos) : pos;
     float posB = (n - 1) - posA;
-    int a0 = (int)floorf(posA);
-    float af = posA - a0;
-    uint16_t ap0 = _segStart + a0;
-    uint16_t ap1 = _segStart + min<uint16_t>(a0 + 1, n - 1);
-    setPixelScaled(ap0, 1.0f - af, _color);
-    if (ap1 != ap0) setPixelScaled(ap1, af, _color);
-    int b0 = (int)floorf(posB);
-    float bf = posB - b0;
-    uint16_t bp0 = _segStart + b0;
-    uint16_t bp1 = _segStart + min<uint16_t>(b0 + 1, n - 1);
-    setPixelScaled(bp0, 1.0f - bf, _color);
-    if (bp1 != bp0) setPixelScaled(bp1, bf, _color);
+    renderSoftDot(posA, _color, 2.8f, true);
+    renderSoftDot(posB, _color, 2.8f, true);
   }
 
   void renderBlink(unsigned long now) {
@@ -396,10 +439,9 @@ private:
   void renderFade(unsigned long now) {
     float period = max<uint16_t>(_speed, 1000);
     float t = (float)((now - _startedMs) % (unsigned long)period) / period;
-    // Use smooth sine-based easing for clean fade in/out
-    float f = (sinf((t * 2.0f - 1.0f) * 1.5708f) + 1.0f) * 0.5f; // sin maps [-1,1] to [0,1]
-    uint32_t c = scaleColor(_color, f);
-    fillSeg(c);
+    float f = (sinf((t * 2.0f - 1.0f) * 1.5708f) + 1.0f) * 0.5f;
+    clearSeg();
+    for (uint16_t i = _segStart; i < _segEnd; i++) setPixelScaled(i, f, _color);
   }
 
   void renderRainbow(unsigned long now, bool cycle) {
@@ -409,23 +451,27 @@ private:
     for (uint16_t i = 0; i < n; i++) {
       uint16_t idx = cycle ? ((i * 256 / n) + offset) & 0xFF : ((i + offset) & 0xFF);
       uint32_t c = wheel(idx);
-      strip.setPixelColor(_segStart + (_reverse ? (n - 1 - i) : i), c);
+      setPixelColorScaled(_segStart + (_reverse ? (n - 1 - i) : i), c);
     }
   }
 
   void renderComet(unsigned long now) {
     uint16_t n = segLen(); if (n == 0) return;
-  dimAll(32);
+    clearSeg();
     float period = (float)max<uint16_t>(_speed, 300);
     float t = ((now - _startedMs) % (unsigned long)period) / period;
-    float pos = t * (float)n;
+    float pos = t * (float)(n - 1);
     if (_reverse) pos = (float)(n - 1) - pos;
-    int i0 = (int)floorf(pos);
-    float frac = pos - i0;
-    uint16_t p0 = _segStart + (uint16_t)constrain(i0, 0, (int)n - 1);
-    uint16_t p1 = _segStart + (uint16_t)constrain(i0 + 1, 0, (int)n - 1);
-    setPixelScaled(p0, 1.0f - frac, _color);
-    if (p1 != p0) setPixelScaled(p1, frac, _color);
+    float tailLen = 5.8f;
+    for (uint16_t i = 0; i < n; i++) {
+      float pixelPos = (float)i;
+      float behind = _reverse ? (pixelPos - pos) : (pos - pixelPos);
+      if (behind <= 0.0f || behind > tailLen) continue;
+      float mix = 1.0f - (behind / tailLen);
+      mix = mix * mix * (3.0f - 2.0f * mix);
+      addPixelScaled(_segStart + i, 0.48f * mix, _color);
+    }
+    renderSoftDot(pos, _color, 2.2f, true, 1.0f);
   }
 
   void renderRunningLights(unsigned long now) {
@@ -486,11 +532,11 @@ private:
       if (_fillerFill > 0) {
         if (!_reverse) {
           for (uint16_t i = 0; i < _fillerFill; i++) {
-            strip.setPixelColor(_segStart + (n - 1 - i), _color);
+            setPixelColorScaled(_segStart + (n - 1 - i), _color);
           }
         } else {
           for (uint16_t i = 0; i < _fillerFill; i++) {
-            strip.setPixelColor(_segStart + i, _color);
+            setPixelColorScaled(_segStart + i, _color);
           }
         }
       }
@@ -510,11 +556,11 @@ private:
       if (_fillerFill > 0) {
         if (!_reverse) {
           for (uint16_t i = 0; i < _fillerFill; i++) {
-            strip.setPixelColor(_segStart + (n - 1 - i), BLACK);
+            setPixelColorScaled(_segStart + (n - 1 - i), BLACK);
           }
         } else {
           for (uint16_t i = 0; i < _fillerFill; i++) {
-            strip.setPixelColor(_segStart + i, BLACK);
+            setPixelColorScaled(_segStart + i, BLACK);
           }
         }
       }
@@ -528,7 +574,7 @@ private:
         // Create smooth black drop: p1 is fully black (head), p0 fades from color to black
         if (p1 != p0) {
           setPixelScaled(p0, frac, _color); // trailing edge: more black as drop advances
-          strip.setPixelColor(p1, BLACK);    // drop head is fully black
+          setPixelColorScaled(p1, BLACK);    // drop head is fully black
         } else {
           setPixelScaled(p0, 1.0f - frac, _color); // single pixel fades to black
         }
@@ -544,7 +590,7 @@ private:
     uint16_t chance = constrain(100000 / period, 1, 100); // slower = less frequent
     if (random(100) < chance) {
       uint16_t i = _segStart + random(n);
-      strip.setPixelColor(i, _color);
+      setPixelColorScaled(i, _color);
     }
   }
 
@@ -558,7 +604,7 @@ private:
       uint8_t sparks = 1 + (random(100) < 30 ? 1 : 0);
       for (uint8_t s = 0; s < sparks; s++) {
         uint16_t i = _segStart + random(n);
-        strip.setPixelColor(i, _color);
+        setPixelColorScaled(i, _color);
       }
     }
   }
@@ -573,7 +619,7 @@ private:
     uint16_t chance = constrain(100000 / period, 5, 100);
     if (random(100) < chance) {
       uint16_t i = _segStart + random(n);
-      strip.setPixelColor(i, _color);
+      setPixelColorScaled(i, _color);
     }
   }
 
@@ -603,7 +649,7 @@ private:
     int limit = min<int>(idx, n);
     for (int i = 0; i < limit; i++) {
       uint16_t p = _segStart + (_reverse ? (n - 1 - i) : i);
-      strip.setPixelColor(p, _wipeColor);
+      setPixelColorScaled(p, _wipeColor);
     }
   }
 };

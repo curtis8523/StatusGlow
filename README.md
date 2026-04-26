@@ -12,14 +12,14 @@ It is set up for:
 - Polls Microsoft Teams presence with device login
 - Displays status with configurable LED effects and colors
 - Lets you change RGB/RGBW mode at runtime
-- Hosts a local web UI for config, effects, logs, and firmware upload
+- Hosts a local web UI for config, effects, logs, firmware upload, and filesystem OTA upload
 - Falls back to a local AP when Wi-Fi is not configured
 - Stores Wi-Fi, app settings, effects, and Microsoft auth context in ESP32 NVS so they survive normal flashes and `uploadfs`
 - Supports an onboard status LED on ESP32-S3 boards that have one on GPIO21
 
 ## Default Hardware Settings
 
-- LED data pin: `D8`
+- LED data pin: `D10` on the default XIAO ESP32S3 build
 - LED count: `16`
 - Default board/environment: `seeed_xiao_esp32s3`
 - Status LED pin: `GPIO21` on supported ESP32-S3 boards
@@ -129,7 +129,12 @@ Upload firmware OTA:
 - Open the Firmware page
 - Upload the `.bin`
 
-Recover the web UI after changing frontend files:
+Upload the SPIFFS/web UI image OTA:
+
+- Open the Firmware page
+- Upload the filesystem image such as `spiffs.bin`
+
+Recover the web UI after changing frontend files over USB:
 
 - Run `pio run -e <env> -t uploadfs`
 
