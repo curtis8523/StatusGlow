@@ -44,14 +44,14 @@
 #define UI_BAR_H3 18
 
 // UI/admin security
-// Protected UI pages and management APIs require this key via either:
+// Protected UI pages and management APIs use this key via either:
 // - HTTP header 'X-StatusGlow-Key' or legacy 'X-OTA-Key'
 // - query/form parameter 'key'
-// Leave blank to reuse the generated initial AP password by default.
+// Leave blank to disable auth for the local web UI and management APIs.
 #define ADMIN_SHARED_KEY ""
 
 // OTA security
-// Leave blank to reuse the admin key.
+// Leave blank to match the admin key behavior above.
 #define OTA_SHARED_KEY ADMIN_SHARED_KEY
 
 // Status LED configuration (onboard WS2812 on S3 board)

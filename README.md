@@ -42,13 +42,13 @@ pio run -e seeed_xiao_esp32c3 -t upload
 pio run -e waveshare_esp32s3_zero -t upload
 ```
 
-`uploadfs` pushes the files in `data/` such as the logo and favicon.
+`uploadfs` pushes the static web UI and assets from `data/`.
 
 ## First-Time Setup
 
 1. Flash firmware.
 2. Connect to the device AP.
-3. The captive portal should open the Config page automatically. If it does not, open `http://192.168.4.1/?key=statusglow-xxxx`.
+3. The captive portal should open the Wi-Fi setup page automatically. If it does not, open `http://192.168.4.1/setup`.
 4. Enter Wi-Fi and Microsoft app details.
 5. Start device login and complete the Microsoft sign-in flow.
 6. Save settings and reboot if prompted.
@@ -61,25 +61,19 @@ If the device does not have working Wi-Fi, it starts its own AP:
 - Password: `statusglow-xxxx`
 - IP: `http://192.168.4.1`
 
-When you join that AP, the device also runs a captive portal and redirects common phone/laptop Wi-Fi setup checks to the local Config page.
+When you join that AP, the device also runs a captive portal and redirects common phone/laptop Wi-Fi setup checks to a dedicated Wi-Fi setup page.
 
 `XXXX` is the last two octets of the device MAC address in hex. The same suffix is also added to the device hostname, so the device will show up with a matching name like `statusglow-ab12.local`.
 
 ## Web UI Security
 
-Admin pages and management APIs are protected by a shared key. By default it matches the AP password:
-
-- Key: `statusglow-xxxx`
-
-Open the UI with the key in the URL:
+By default, the local web UI and management APIs do not require a key. Open the device directly at:
 
 ```text
-http://192.168.4.1/?key=statusglow-xxxx
+http://192.168.4.1
 ```
 
-The UI will carry that key to the other pages and API calls automatically.
-
-If you want to change the default, update `THING_NAME`, `WIFI_INITIAL_AP_PASSWORD_PREFIX`, and optionally `ADMIN_SHARED_KEY` in [src/config.h](src/config.h).
+If you want to add protection later, set `ADMIN_SHARED_KEY` and optionally `OTA_SHARED_KEY` in [src/config.h](src/config.h).
 
 ## Microsoft Teams Setup
 
@@ -108,10 +102,11 @@ Then click `Start device login`, open the Microsoft device login page, and compl
 ## Main Config Files
 
 - [platformio.ini](platformio.ini): board environments, LED pin, LED count
-- [src/config.h](src/config.h): runtime defaults, AP password, admin key, status LED settings
+- [src/config.h](src/config.h): runtime defaults, AP password, optional web UI / OTA key, status LED settings
 - [src/main.cpp](src/main.cpp): firmware logic and API routes
-- [src/request_handler.h](src/request_handler.h): embedded web UI
-- [src/spiffs_webserver.h](src/spiffs_webserver.h): SPIFFS helpers and upload endpoints
+- [src/request_handler.h](src/request_handler.h): API helpers and Microsoft device-login handlers
+- [src/spiffs_webserver.h](src/spiffs_webserver.h): SPIFFS/static-file helpers and upload endpoints
+- `data/`: static web UI (`index.html`, `app.css`, `app.js`) and assets
 
 ## Common Tasks
 
@@ -125,7 +120,7 @@ Switch between RGB and RGBW:
 
 Upload firmware OTA:
 
-- Open the Firmware page with the admin key in the URL
+- Open the Firmware page
 - Upload the `.bin`
 
 Factory reset:
@@ -143,7 +138,7 @@ LEDs do not respond:
 
 Cannot reach the UI:
 
-- Join the device AP and use `http://192.168.4.1/?key=statusglow-xxxx`
+- Join the device AP and use `http://192.168.4.1`
 - If on normal Wi-Fi, find the device IP from serial output or your router
 
 Teams status does not update:

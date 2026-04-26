@@ -143,15 +143,23 @@ String getContentType(String filename) {
 bool handleFileRead(String path) {
 	DBG_PRINTLN("handleFileRead: " + path);
 	if (path.endsWith("/")) {
-		path += "index.htm";
+		path += "index.html";
 	}
 	String contentType = getContentType(path);
+	String servedPath = path;
 	String pathWithGz = path + ".gz";
 	if (exists(pathWithGz) || exists(path)) {
 		if (exists(pathWithGz)) {
-			path += ".gz";
+			servedPath += ".gz";
 		}
-		File file = SPIFFS.open(path, "r");
+		if (contentType == "text/html") {
+			server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+			server.sendHeader("Pragma", "no-cache");
+			server.sendHeader("Expires", "0");
+		} else {
+			server.sendHeader("Cache-Control", "public, max-age=86400");
+		}
+		File file = SPIFFS.open(servedPath, "r");
 		server.streamFile(file, contentType);
 		file.close();
 		return true;

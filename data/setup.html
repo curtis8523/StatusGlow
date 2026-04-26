@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StatusGlow Setup</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="container">
+    <header class="brand">
+      <div class="brand-row">
+        <div class="brand-left">
+          <img class="brand-img" src="/logo.svg" alt="StatusGlow">
+          <span class="brand-logo" aria-hidden="true"></span>
+          <span class="brand-title">StatusGlow</span>
+          <span class="brand-sub">- Setup</span>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div class="card">
+        <h3>Connect to Wi-Fi</h3>
+        <p class="muted-line">The device is in fallback AP mode. Connect it to your Wi-Fi here, then rejoin your normal network.</p>
+
+        <div class="kv"><strong>Current state</strong><span id="wifi_state">Loading...</span></div>
+
+        <form id="setup-form">
+          <label>
+            SSID
+            <span>
+              <span class="wifi-ssid-input">
+                <input id="ssid" list="ssid-options" placeholder="Select or type SSID">
+                <button type="button" class="btn" id="scan-btn">Scan</button>
+              </span>
+              <datalist id="ssid-options"></datalist>
+              <span id="scan-status" class="wifi-scan-status"></span>
+            </span>
+          </label>
+
+          <label>Password<input id="password" type="password" autocomplete="current-password"></label>
+
+          <div class="button-row mt">
+            <button type="submit" class="btn">Connect Wi-Fi</button>
+          </div>
+        </form>
+
+        <div id="result" class="mt muted-line"></div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    async function fetchJson(url, init) {
+      const response = await fetch(url, init);
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : null;
+      if (!response.ok) {
+        throw new Error((data && data.error) || ("HTTP " + response.status));
+      }
+      return data;
+    }
+
+    function setText(id, value) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = value == null ? "" : String(value);
+    }
+
+    function describeWifiState(state) {
+      const ap = state.ap_enabled ? ("AP " + state.ap_ssid + " @ " + state.ap_ip) : "AP off";
+      const sta = parseInt(state.status, 10) === 3 ? ("STA " + state.ssid + " @ " + state.sta_ip) : "STA disconnected";
+      return sta + " | " + ap;
+    }
+
+    async function loadState() {
+      const state = await fetchJson("/api/wifi", { cache: "no-store" });
+      setText("wifi_state", describeWifiState(state));
+      if (state.ssid && !document.getElementById("ssid").value) {
+        document.getElementById("ssid").value = state.ssid;
+      }
+      return state;
+    }
+
+    function populateNetworks(networks) {
+      const list = document.getElementById("ssid-options");
+      list.innerHTML = "";
+      const sorted = (Array.isArray(networks) ? networks.slice() : []).sort((a, b) => ((b && b.rssi) || -100) - ((a && a.rssi) || -100));
+      sorted.forEach((network) => {
+        if (!network || !network.ssid) return;
+        const option = document.createElement("option");
+        let label = network.ssid;
+        if (network.rssi != null) {
+          label += " (" + network.rssi + " dBm";
+          label += network.secure ? " secured" : " open";
+          label += ")";
+        }
+        option.value = network.ssid;
+        option.textContent = label;
+        list.appendChild(option);
+      });
+      if (sorted.length && !document.getElementById("ssid").value) {
+        document.getElementById("ssid").value = sorted[0].ssid;
+      }
+    }
+
+    async function scanNetworks() {
+      const button = document.getElementById("scan-btn");
+      button.disabled = true;
+      button.textContent = "Scanning...";
+      setText("scan-status", "Scanning for networks...");
+      try {
+        const result = await fetchJson("/api/wifi_scan", { cache: "no-store" });
+        const networks = Array.isArray(result.networks) ? result.networks : [];
+        populateNetworks(networks);
+        setText("scan-status", networks.length ? ("Found " + networks.length + " network" + (networks.length === 1 ? "." : "s.")) : "No networks found.");
+      } catch (err) {
+        setText("scan-status", "Scan failed: " + err.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = "Scan";
+      }
+    }
+
+    async function connectWifi(event) {
+      event.preventDefault();
+      const result = document.getElementById("result");
+      setText("result", "Connecting...");
+      try {
+        const response = await fetchJson("/api/wifi", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ssid: (document.getElementById("ssid").value || "").trim(),
+            password: document.getElementById("password").value || ""
+          })
+        });
+
+        if (response && response.ok) {
+          const pieces = [
+            "Connected to " + (response.ssid || "Wi-Fi") + ".",
+            "Device IP: http://" + response.ip + "/"
+          ];
+          if (response.host_local) {
+            pieces.push("Hostname: http://" + response.host_local + "/");
+          }
+          if (response.ap_stopping) {
+            pieces.push("The setup AP will stay up for about " + Math.round((response.ap_stop_delay_ms || 0) / 1000) + " seconds while you switch back to your normal Wi-Fi.");
+          }
+          setText("result", pieces.join(" "));
+          setTimeout(function () {
+            loadState().catch(function () {});
+          }, 1000);
+        } else {
+          setText("result", "Wi-Fi connection failed. Please check the SSID and password and try again.");
+        }
+      } catch (err) {
+        setText("result", "Wi-Fi connection failed: " + err.message);
+      }
+    }
+
+    window.addEventListener("load", function () {
+      document.getElementById("scan-btn").addEventListener("click", scanNetworks);
+      document.getElementById("setup-form").addEventListener("submit", connectWifi);
+      loadState().catch((err) => setText("wifi_state", "Error: " + err.message));
+    });
+  </script>
+</body>
+</html>

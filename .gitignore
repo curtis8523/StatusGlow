@@ -55,3 +55,6 @@ config_local.h
 *.sym
 build/
 dist/
+
+# Generated compressed web assets
+data/*.gz

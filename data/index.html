@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StatusGlow</title>
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="container">
+    <header class="brand">
+      <div class="brand-row">
+        <div class="brand-left">
+          <img class="brand-img" src="/logo.svg" alt="StatusGlow">
+          <span class="brand-logo" aria-hidden="true"></span>
+          <span class="brand-title">StatusGlow</span>
+          <span class="brand-sub" id="page-subtitle"></span>
+        </div>
+        <div class="brand-right">
+          <span class="brand-ver" id="brand-version">v-</span>
+        </div>
+      </div>
+      <nav class="tabs">
+        <a class="tab" data-route="home" href="/">Home</a>
+        <a class="tab" data-route="config" href="/config">Config</a>
+        <a class="tab" data-route="effects" href="/effects">Effects</a>
+        <a class="tab" data-route="logs" href="/logs">Logs</a>
+        <a class="tab" data-route="fw" href="/fw">Firmware</a>
+      </nav>
+    </header>
+
+    <div class="topbar">
+      <strong>CPU</strong>
+      <span id="live_cpu" class="pill"></span>
+      <strong class="ml-s">Heap</strong>
+      <span id="live_heap" class="pill"></span>
+      <strong class="ml-s">Wi-Fi</strong>
+      <span id="live_wifi" class="bars" aria-label="Wi-Fi signal"></span>
+      <button id="theme_toggle" class="btn ml-s" type="button" title="Toggle theme">Theme</button>
+    </div>
+
+    <main>
+      <section id="page-home" class="page">
+        <div class="card">
+          <div class="status-grid">
+            <section>
+              <h3>LED status</h3>
+              <div id="home-current-line" class="lead"></div>
+              <div class="mt-s stat">
+                <span>Color</span>
+                <span id="home-swatch" class="swatch"></span>
+              </div>
+            </section>
+            <section>
+              <h3>System info</h3>
+              <div class="kv"><strong>Polling interval</strong><span><span id="home-poll-interval"></span> s</span></div>
+              <div class="kv"><strong>LEDs</strong><span id="home-num-leds"></span></div>
+              <div class="kv"><strong>Uptime</strong><span id="home-uptime"></span></div>
+              <div class="kv">
+                <strong>Wi-Fi</strong>
+                <span>
+                  <span id="home-wifi-bars" class="bars" aria-label="Wi-Fi signal"></span>
+                  <span class="ml-s meta">RSSI <span id="home-rssi"></span> dBm</span>
+                  <span class="ml-s meta">SSID <span id="home-ssid"></span></span>
+                  <span class="ml-s meta">IP <span id="home-ip"></span></span>
+                </span>
+              </div>
+              <div class="kv"><strong>Network</strong><span id="home-network"></span></div>
+              <div class="kv"><strong>Heap</strong><span><span id="home-heap"></span> bytes free, min <span id="home-min-heap"></span></span></div>
+              <div class="kv"><strong>CPU / Version</strong><span><span id="home-cpu-freq"></span> / <span id="home-version"></span></span></div>
+            </section>
+          </div>
+
+          <section class="mt">
+            <h3>Memory usage</h3>
+            <div class="row" id="home-sketch-text"></div>
+            <progress id="home-sketch-progress" max="1" value="0"></progress>
+            <div class="row mt-s" id="home-ram-text"></div>
+            <progress id="home-ram-progress" max="1" value="0"></progress>
+          </section>
+        </div>
+      </section>
+
+      <section id="page-config" class="page hidden">
+        <div class="card">
+          <form id="cfg-form">
+            <label>Client ID<input id="cfg-client-id"></label>
+            <label>Tenant<input id="cfg-tenant"></label>
+            <label>Presence polling (sec)<input id="cfg-poll" type="number" min="1" step="1"></label>
+            <label>
+              LED Type
+              <select id="cfg-led-type">
+                <option value="false">RGB (3-color)</option>
+                <option value="true">RGBW (4-color)</option>
+              </select>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="cfg-status-led">
+              <span>Enable Status LED (S3 only, GPIO21)</span>
+            </label>
+
+            <fieldset class="mt">
+              <legend>Wi-Fi</legend>
+              <div id="cfg-wifi-state" class="muted-line"></div>
+              <label>
+                SSID
+                <span>
+                  <span class="wifi-ssid-input">
+                    <input id="cfg-ssid" list="cfg-ssid-options" placeholder="Select or type SSID">
+                    <button type="button" class="btn" id="cfg-wifi-scan-btn">Scan</button>
+                  </span>
+                  <datalist id="cfg-ssid-options"></datalist>
+                  <span id="cfg-wifi-scan-status" class="wifi-scan-status"></span>
+                </span>
+              </label>
+              <label>Password<input id="cfg-wifi-password" type="password"></label>
+              <div class="button-row mt">
+                <button type="button" class="btn" id="cfg-connect-btn">Connect Wi-Fi</button>
+                <button type="button" class="btn" id="cfg-ap-start-btn">Start AP</button>
+                <button type="button" class="btn" id="cfg-ap-stop-btn">Stop AP</button>
+              </div>
+            </fieldset>
+
+            <div class="button-row mt">
+              <button type="submit" class="btn">Save</button>
+              <button type="button" class="btn" id="cfg-reload-btn">Reload</button>
+              <button type="button" class="btn" id="cfg-device-login-btn">Start device login</button>
+              <button type="button" class="btn btn-danger" id="cfg-reboot-btn">Reboot Device</button>
+            </div>
+            <div id="cfg-status" class="muted-line mt-s"></div>
+          </form>
+
+          <section class="mt">
+            <h3>Danger area</h3>
+            <div class="button-row">
+              <button type="button" class="btn" id="cfg-factory-reset-btn">Factory reset (clear and reboot)</button>
+            </div>
+          </section>
+        </div>
+
+        <dialog id="cfg-reset-dialog">
+          <p class="title">Factory reset: clear all settings and reboot?</p>
+          <p id="cfg-reset-copy"></p>
+          <div class="dialog-menu">
+            <button class="btn" id="cfg-reset-cancel-btn">Cancel</button>
+            <button class="btn" id="cfg-reset-confirm-btn">Clear settings and reboot</button>
+          </div>
+        </dialog>
+
+        <dialog id="cfg-reset-result-dialog">
+          <p class="title">Settings cleared. Rebooting...</p>
+        </dialog>
+
+        <dialog id="cfg-device-login-dialog">
+          <p class="title">Start device login</p>
+          <p id="cfg-device-login-message"></p>
+          <input type="text" id="cfg-device-login-code" disabled>
+          <menu class="dialog-menu">
+            <button id="cfg-device-login-close-btn">Close</button>
+            <a class="btn" id="cfg-device-login-open-link" href="https://microsoft.com/devicelogin" target="_blank" rel="noopener">Open device login</a>
+          </menu>
+        </dialog>
+      </section>
+
+      <section id="page-effects" class="page hidden">
+        <div class="card">
+          <div class="controls">
+            <label>Global Fade (ms): <input id="fx-fade" type="number" min="0" step="50"></label>
+            <label>Brightness (%): <input id="fx-brightness" type="number" min="0" max="100" step="1"></label>
+            <input id="fx-brightness-range" type="range" min="0" max="100" step="1">
+            <label>Gamma: <input id="fx-gamma" type="number" min="0.1" max="5" step="0.1"></label>
+            <label>LEDs: <input id="fx-num-leds" type="number" min="1" max="1024" step="1"></label>
+            <label><input id="fx-preview-mode" type="checkbox"> Preview Mode</label>
+            <button class="btn" id="fx-save-btn">Save</button>
+            <button class="btn" id="fx-apply-leds-btn">Apply LED Count</button>
+            <button class="btn" id="fx-reload-btn">Reload</button>
+          </div>
+          <div id="fx-status" class="muted-line"></div>
+          <div id="fx-current" class="row current-text"></div>
+          <div class="table-wrap">
+            <table id="fx-table">
+              <thead>
+                <tr>
+                  <th style="width:72px">Preview</th>
+                  <th style="min-width:140px">Key</th>
+                  <th style="min-width:150px">Mode</th>
+                  <th style="width:170px">Duration (s)</th>
+                  <th style="width:110px">Color</th>
+                  <th style="width:120px">Fade (ms)</th>
+                  <th style="width:120px">Brightness (%)</th>
+                  <th style="width:110px">Actions</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-logs" class="page hidden">
+        <div class="card">
+          <div class="controls">
+            <label>Show last <input id="logs-count" type="number" min="1" max="120" value="50"></label>
+            <label><input id="logs-auto" type="checkbox" checked> Auto-refresh</label>
+            <button class="btn" id="logs-reload-btn">Reload</button>
+            <span id="logs-meta" class="meta"></span>
+          </div>
+          <pre id="logs-box" class="logbox">(loading...)</pre>
+        </div>
+      </section>
+
+      <section id="page-fw" class="page hidden">
+        <div class="card">
+          <section>
+            <h3>Current version</h3>
+            <div class="kv"><strong>Version:</strong> <span id="fw-version"></span></div>
+            <div class="kv"><strong>Sketch:</strong> <span id="fw-sketch"></span></div>
+            <div class="kv"><strong>Flash:</strong> <span id="fw-flash"></span></div>
+            <div class="kv"><strong>SDK:</strong> <span id="fw-sdk"></span></div>
+          </section>
+
+          <section class="mt">
+            <h3>Upload new firmware</h3>
+            <form id="fw-form" method="POST" action="/update" enctype="multipart/form-data">
+              <input type="file" name="firmware" accept=".bin,.bin.gz" required>
+              <button class="btn" type="submit">Upload and Install</button>
+              <button class="btn" type="button" id="fw-view-ota-btn">View last OTA log</button>
+            </form>
+            <div class="hint mt-s">Device will reboot automatically after a successful update.</div>
+            <div id="fw-status" class="mt-s muted-line"></div>
+          </section>
+        </div>
+
+        <dialog id="fw-ota-dialog">
+          <h3>Last OTA log</h3>
+          <pre id="fw-ota-log" class="logarea">(loading...)</pre>
+          <div class="dialog-menu">
+            <button class="btn" id="fw-ota-close-btn">Close</button>
+          </div>
+        </dialog>
+      </section>
+    </main>
+  </div>
+
+  <script defer src="/app.js"></script>
+</body>
+</html>
