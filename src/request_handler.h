@@ -59,7 +59,10 @@ boolean requestJsonApi(JsonDocument& doc, String url, String payload = "", size_
 		https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
 
 		if (sendAuth) {
-			String header = "Bearer " + access_token;
+			String header;
+			header.reserve(access_token.length() + 8);
+			header += F("Bearer ");
+			header += access_token;
 			https.addHeader("Authorization", header);
 			DBG_PRINT("[HTTPS] Auth token valid for "); DBG_PRINT(getTokenLifetime()); DBG_PRINTLN(" s.");
 		}
@@ -154,7 +157,7 @@ void handleGetSettings() {
 	bh.add((int)UI_BAR_H0); bh.add((int)UI_BAR_H1); bh.add((int)UI_BAR_H2); bh.add((int)UI_BAR_H3);
 	ui["min_refresh_ms"] = UI_MIN_REFRESH_MS;
 
-	server.send(200, "application/json", responseDoc.as<String>());
+	sendJsonDocument(200, responseDoc);
 }
 
 void handleClearSettings() {
@@ -173,7 +176,7 @@ void handleClearSettings() {
 	clearWifiPrefs();
 	WiFi.persistent(true);
 	WiFi.disconnect(false, true);
-	server.send(200, "application/json", F("{\"ok\":true}"));
+	sendApiOk(200);
 	ESP.restart();
 }
 
@@ -185,18 +188,23 @@ void handleStartDevicelogin() {
 		String tenant = String(paramTenantValue);
 		tenant.trim();
 		if (clientId.isEmpty()) {
-			server.send(400, "application/json", F("{\"error\":\"missing_client_id\",\"message\":\"Set and save the Microsoft Client ID before starting device login.\"}"));
+			sendApiError(400, "missing_client_id", "Set and save the Microsoft Client ID before starting device login.");
 			return;
 		}
 		if (tenant.isEmpty()) {
-			server.send(400, "application/json", F("{\"error\":\"missing_tenant\",\"message\":\"Set and save the Microsoft tenant before starting device login.\"}"));
+			sendApiError(400, "missing_tenant", "Set and save the Microsoft tenant before starting device login.");
 			return;
 		}
 		JsonDocument doc;
+		String payload;
+		payload.reserve(clientId.length() + device_code.length() + 96);
+		payload += F("client_id=");
+		payload += clientId;
+		payload += F("&scope=offline_access%20openid%20Presence.Read");
 		boolean res = requestJsonApi(
 			doc,
 			"https://login.microsoftonline.com/" + tenant + "/oauth2/v2.0/devicecode",
-			"client_id=" + clientId + "&scope=offline_access%20openid%20Presence.Read",
+			payload,
 			0
 		);
 
@@ -216,29 +224,32 @@ void handleStartDevicelogin() {
 				responseDoc["verification_uri_complete"] = device_login_verification_uri_complete;
 			}
 			responseDoc["message"] = device_login_message;
+			gDeviceLoginTransientFailures = 0;
 			state = SMODEDEVICELOGINSTARTED;
 			tsPolling = millis() + (interval * 1000);
-			server.send(200, "application/json", responseDoc.as<String>());
+			sendJsonDocument(200, responseDoc);
 		} else if (res && !doc["error"].isNull()) {
 			JsonDocument responseDoc;
+			responseDoc["ok"] = false;
 			responseDoc["error"] = doc["error"].as<String>();
 			if (!doc["error_description"].isNull()) {
 				responseDoc["message"] = doc["error_description"].as<String>();
 			} else if (!doc["message"].isNull()) {
 				responseDoc["message"] = doc["message"].as<String>();
 			}
-			server.send(400, "application/json", responseDoc.as<String>());
+			sendJsonDocument(400, responseDoc);
 		} else {
-			server.send(502, "application/json", F("{\"error\":\"devicelogin_unknown_response\",\"message\":\"Microsoft device login did not return a usable device code response.\"}"));
+			sendApiError(502, "devicelogin_unknown_response", "Microsoft device login did not return a usable device code response.");
 		}
 	} else {
 		JsonDocument responseDoc;
+		responseDoc["ok"] = false;
 		responseDoc["error"] = "devicelogin_already_running";
 		responseDoc["message"] = "A device login is already waiting for approval.";
 		if (user_code.length()) responseDoc["user_code"] = user_code;
 		if (device_login_verification_uri.length()) responseDoc["verification_uri"] = device_login_verification_uri;
 		if (device_login_verification_uri_complete.length()) responseDoc["verification_uri_complete"] = device_login_verification_uri_complete;
 		if (device_login_message.length()) responseDoc["message"] = device_login_message;
-		server.send(409, "application/json", responseDoc.as<String>());
+		sendJsonDocument(409, responseDoc);
 	}
 }

@@ -66,6 +66,9 @@ static const char* PREF_AUTH_CONTEXT = "auth_ctx";
 static bool loadJsonPrefs(const char* key, JsonDocument& doc);
 static bool saveJsonPrefs(const char* key, const JsonDocument& doc);
 static void removePrefsKey(const char* key);
+static void removeLegacyAppConfigFilesIfPresent();
+static void removeLegacyContextFileIfPresent();
+void onWifiConnected();
 
 // NeoPixel strip / effects engine
 // Note: Compiled to support both RGB and RGBW, switchable at runtime
@@ -242,6 +245,7 @@ void loadAppConfig() {
 	bool loadedFromPrefs = loadJsonPrefs(PREF_APP_CONFIG, doc);
 	if (!loadedFromPrefs) {
 		bool migratedFromSpiffs = false;
+		bool migratedEffectsFromSpiffs = false;
 		if (gSpiffsReady && SPIFFS.exists(CONFIG_FILE)) {
 			File f = SPIFFS.open(CONFIG_FILE, FILE_READ);
 			if (f) {
@@ -261,6 +265,7 @@ void loadAppConfig() {
 			if (fe) {
 				JsonDocument edoc;
 				if (!deserializeJson(edoc, fe)) {
+					migratedEffectsFromSpiffs = true;
 					if (!edoc["fade_ms"].isNull()) gFadeDurationMs = (uint16_t)edoc["fade_ms"].as<unsigned int>();
 					if (!edoc["brightness"].isNull()) { gDefaultBrightness = (uint8_t)edoc["brightness"].as<unsigned int>(); effects.setBrightness(gDefaultBrightness); }
 					if (!edoc["gamma"].isNull()) { gGamma = edoc["gamma"].as<float>(); if (isnan(gGamma) || gGamma < 0.1f) gGamma = 2.2f; if (gGamma > 5.0f) gGamma = 5.0f; }
@@ -286,9 +291,13 @@ void loadAppConfig() {
 		numberLeds = NUMLEDS;
 		effects.setLength(numberLeds);
 		saveAppConfig();
+		if (migratedFromSpiffs || migratedEffectsFromSpiffs) {
+			removeLegacyAppConfigFilesIfPresent();
+		}
 		DBG_PRINTLN(F("loadAppConfig() - created initial NVS config"));
 		return;
 	}
+	removeLegacyAppConfigFilesIfPresent();
 	JsonObject sys = doc["system"];
 	if (!sys.isNull()) {
 		if (!sys["client_id"].isNull()) strlcpy(paramClientIdValue, sys["client_id"], sizeof(paramClientIdValue));
@@ -432,6 +441,46 @@ String gApSsid; // SoftAP SSID (matches the generated device name)
 static unsigned long gSoftApStopAtMs = 0;
 static bool gMdnsStarted = false;
 
+enum AsyncJobState : uint8_t {
+	ASYNC_JOB_IDLE = 0,
+	ASYNC_JOB_RUNNING = 1,
+	ASYNC_JOB_SUCCESS = 2,
+	ASYNC_JOB_FAILED = 3
+};
+
+struct WifiConnectJob {
+	AsyncJobState state = ASYNC_JOB_IDLE;
+	String ssid;
+	String password;
+	String message;
+	String ip;
+	int status = WL_IDLE_STATUS;
+	unsigned long startedAtMs = 0;
+	unsigned long completedAtMs = 0;
+	bool apStopScheduled = false;
+};
+
+struct WifiScanResult {
+	String ssid;
+	int32_t rssi = 0;
+	bool secure = false;
+};
+
+struct WifiScanJob {
+	AsyncJobState state = ASYNC_JOB_IDLE;
+	String message;
+	unsigned long startedAtMs = 0;
+	unsigned long completedAtMs = 0;
+	int count = 0;
+	WifiScanResult results[20];
+};
+
+static WifiConnectJob gWifiConnectJob;
+static WifiScanJob gWifiScanJob;
+static TaskHandle_t gWifiScanTask = nullptr;
+static uint8_t gDeviceLoginTransientFailures = 0;
+static const uint8_t DEVICE_LOGIN_TRANSIENT_FAILURE_LIMIT = 12;
+
 static bool loadJsonPrefs(const char* key, JsonDocument& doc) {
 	Preferences prefs;
 	if (!prefs.begin(PREFS_NAMESPACE, true)) {
@@ -519,6 +568,33 @@ static void loadWifiPrefs() {
 	prefs.end();
 }
 
+static const char* asyncJobStateName(AsyncJobState state) {
+	switch (state) {
+		case ASYNC_JOB_RUNNING: return "running";
+		case ASYNC_JOB_SUCCESS: return "success";
+		case ASYNC_JOB_FAILED: return "failed";
+		default: return "idle";
+	}
+}
+
+static bool isAllowedPublicAssetPath(String path) {
+	if (path.length() == 0) return false;
+	const int queryPos = path.indexOf('?');
+	if (queryPos >= 0) path.remove(queryPos);
+	if (path.endsWith("/")) path += "index.html";
+	static const char* const kAllowedPaths[] = {
+		"/app.css",
+		"/app.js",
+		"/favicon.ico",
+		"/logo.svg",
+		"/setup.html"
+	};
+	for (size_t i = 0; i < (sizeof(kAllowedPaths) / sizeof(kAllowedPaths[0])); ++i) {
+		if (path.equals(kAllowedPaths[i])) return true;
+	}
+	return false;
+}
+
 String getPresentedSharedKey() {
 	String k = server.header("X-StatusGlow-Key");
 	if (k.length() == 0) k = server.header("X-OTA-Key");
@@ -535,14 +611,44 @@ bool isRequestAuthorized(const char* expectedKey) {
 	return getPresentedSharedKey() == expectedKey;
 }
 
+static const char* kJsonMimeType = "application/json";
+
+static void sendJsonDocument(int statusCode, const JsonDocument& doc) {
+	String payload;
+	payload.reserve(measureJson(doc) + 1);
+	serializeJson(doc, payload);
+	server.send(statusCode, kJsonMimeType, payload);
+}
+
+static void sendApiError(int statusCode, const char* error, const char* message = nullptr, const char* scope = nullptr) {
+	JsonDocument doc;
+	doc["ok"] = false;
+	doc["error"] = error ? error : "unknown_error";
+	if (message && message[0] != '\0') doc["message"] = message;
+	if (scope && scope[0] != '\0') doc["scope"] = scope;
+	sendJsonDocument(statusCode, doc);
+}
+
+static void sendApiOk(int statusCode, const char* message = nullptr) {
+	JsonDocument doc;
+	doc["ok"] = true;
+	if (message && message[0] != '\0') doc["message"] = message;
+	sendJsonDocument(statusCode, doc);
+}
+
+static bool parseJsonBody(JsonDocument& doc) {
+	DeserializationError err = deserializeJson(doc, server.arg("plain"));
+	if (err) {
+		sendApiError(400, "invalid_json", "Request body was not valid JSON.");
+		return false;
+	}
+	return true;
+}
+
 static void sendUnauthorizedResponse(const char* scope) {
 	const bool structured = server.uri().startsWith("/api/") || server.uri().startsWith("/fs/");
 	if (structured) {
-		JsonDocument d;
-		d["ok"] = false;
-		d["error"] = "unauthorized";
-		d["scope"] = scope;
-		server.send(401, "application/json", d.as<String>());
+		sendApiError(401, "unauthorized", "A valid shared key is required for this request.", scope);
 	} else {
 		server.send(401, "text/plain", "Unauthorized");
 	}
@@ -583,14 +689,21 @@ static String normalizedHostHeader(String host) {
 static bool isCaptivePortalLocalHost(const String& host) {
 	if (host.length() == 0) return false;
 	if (host == F("localhost")) return true;
-	if (host == WiFi.softAPIP().toString()) return true;
+	const String apIp = WiFi.softAPIP().toString();
+	if (host == apIp) return true;
 	if (host == gThingHostName) return true;
 	if (host == (gThingHostName + F(".local"))) return true;
 	return false;
 }
 
 static String getCaptivePortalUrl() {
-	return String(F("http://")) + WiFi.softAPIP().toString() + F("/setup");
+	String url;
+	const String apIp = WiFi.softAPIP().toString();
+	url.reserve(apIp.length() + 14);
+	url += F("http://");
+	url += apIp;
+	url += F("/setup");
+	return url;
 }
 
 static bool shouldRedirectToCaptivePortal() {
@@ -604,7 +717,11 @@ static void redirectToCaptivePortal() {
 	server.sendHeader("Pragma", "no-cache");
 	server.sendHeader("Expires", "0");
 	server.sendHeader("Location", portalUrl, true);
-	server.send(302, "text/plain; charset=utf-8", String(F("Redirecting to ")) + portalUrl);
+	String message;
+	message.reserve(portalUrl.length() + 16);
+	message += F("Redirecting to ");
+	message += portalUrl;
+	server.send(302, "text/plain; charset=utf-8", message);
 }
 
 static void handleCaptivePortalRequest() {
@@ -864,10 +981,14 @@ boolean loadContext() {
 				} else {
 					saveJsonPrefs(PREF_AUTH_CONTEXT, contextDoc);
 					loadedFromPrefs = true;
+					removeLegacyContextFileIfPresent();
 				}
 			}
 			file.close();
 		}
+	}
+	if (loadedFromPrefs) {
+		removeLegacyContextFileIfPresent();
 	}
 
 	if (loadedFromPrefs) {
@@ -977,6 +1098,195 @@ static void serveStaticAssetOr404(const char* path) {
 	if (!handleFileRead(String(path))) {
 		server.send(404, "text/plain", "FileNotFound");
 	}
+}
+
+static void removeLegacyAppConfigFilesIfPresent() {
+	if (!gSpiffsReady) return;
+	if (SPIFFS.exists(CONFIG_FILE)) SPIFFS.remove(CONFIG_FILE);
+	if (SPIFFS.exists(EFFECTS_FILE)) SPIFFS.remove(EFFECTS_FILE);
+}
+
+static void removeLegacyContextFileIfPresent() {
+	if (!gSpiffsReady) return;
+	if (SPIFFS.exists(CONTEXT_FILE)) SPIFFS.remove(CONTEXT_FILE);
+}
+
+static void fillWifiConnectJobJson(JsonObject obj) {
+	obj["state"] = asyncJobStateName(gWifiConnectJob.state);
+	obj["ssid"] = gWifiConnectJob.ssid;
+	obj["message"] = gWifiConnectJob.message;
+	obj["status"] = gWifiConnectJob.status;
+	obj["ip"] = gWifiConnectJob.ip;
+	obj["started_at_ms"] = gWifiConnectJob.startedAtMs;
+	obj["completed_at_ms"] = gWifiConnectJob.completedAtMs;
+	obj["elapsed_ms"] = (gWifiConnectJob.state == ASYNC_JOB_RUNNING)
+		? (uint32_t)(millis() - gWifiConnectJob.startedAtMs)
+		: (uint32_t)(gWifiConnectJob.completedAtMs > gWifiConnectJob.startedAtMs ? (gWifiConnectJob.completedAtMs - gWifiConnectJob.startedAtMs) : 0);
+	obj["ap_stop_scheduled"] = gWifiConnectJob.apStopScheduled;
+}
+
+static void fillWifiScanJobJson(JsonDocument& doc) {
+	doc["state"] = asyncJobStateName(gWifiScanJob.state);
+	doc["message"] = gWifiScanJob.message;
+	doc["started_at_ms"] = gWifiScanJob.startedAtMs;
+	doc["completed_at_ms"] = gWifiScanJob.completedAtMs;
+	doc["elapsed_ms"] = (gWifiScanJob.state == ASYNC_JOB_RUNNING)
+		? (uint32_t)(millis() - gWifiScanJob.startedAtMs)
+		: (uint32_t)(gWifiScanJob.completedAtMs > gWifiScanJob.startedAtMs ? (gWifiScanJob.completedAtMs - gWifiScanJob.startedAtMs) : 0);
+	doc["count"] = gWifiScanJob.count;
+	JsonArray arr = doc["networks"].to<JsonArray>();
+	for (int i = 0; i < gWifiScanJob.count; ++i) {
+		JsonObject o = arr.add<JsonObject>();
+		o["ssid"] = gWifiScanJob.results[i].ssid;
+		o["rssi"] = gWifiScanJob.results[i].rssi;
+		o["secure"] = gWifiScanJob.results[i].secure;
+	}
+}
+
+static bool startWifiConnectJob(const String& ssid, const String& pass, String& errorMessage) {
+	if (ssid.length() == 0) {
+		errorMessage = "missing_ssid";
+		return false;
+	}
+	if (gWifiConnectJob.state == ASYNC_JOB_RUNNING) {
+		errorMessage = "connect_in_progress";
+		return false;
+	}
+	if (gWifiScanJob.state == ASYNC_JOB_RUNNING) {
+		errorMessage = "scan_in_progress";
+		return false;
+	}
+	gWifiConnectJob.state = ASYNC_JOB_RUNNING;
+	gWifiConnectJob.ssid = ssid;
+	gWifiConnectJob.password = pass;
+	gWifiConnectJob.message = "connecting";
+	gWifiConnectJob.ip = "";
+	gWifiConnectJob.status = WL_IDLE_STATUS;
+	gWifiConnectJob.startedAtMs = millis();
+	gWifiConnectJob.completedAtMs = 0;
+	gWifiConnectJob.apStopScheduled = false;
+
+	const wifi_mode_t targetMode = gApEnabled ? WIFI_AP_STA : WIFI_STA;
+	WiFi.mode(targetMode);
+	delay(100);
+	WiFi.persistent(true);
+	WiFi.disconnect(false, false);
+	delay(100);
+	WiFi.begin(ssid.c_str(), pass.c_str());
+	state = SMODEWIFICONNECTING;
+	addLogf("WiFi connect started for SSID: %s", ssid.c_str());
+	return true;
+}
+
+static void processWifiConnectJob() {
+	if (gWifiConnectJob.state != ASYNC_JOB_RUNNING) return;
+	const wl_status_t wifiStatus = WiFi.status();
+	gWifiConnectJob.status = (int)wifiStatus;
+	if (wifiStatus == WL_CONNECTED) {
+		onWifiConnected();
+		strlcpy(paramWifiSsidValue, gWifiConnectJob.ssid.c_str(), sizeof(paramWifiSsidValue));
+		strlcpy(paramWifiPasswordValue, gWifiConnectJob.password.c_str(), sizeof(paramWifiPasswordValue));
+		saveWifiPrefs(paramWifiSsidValue, paramWifiPasswordValue);
+		saveAppConfig();
+		gWifiConnectJob.state = ASYNC_JOB_SUCCESS;
+		gWifiConnectJob.message = "connected";
+		gWifiConnectJob.ip = WiFi.localIP().toString();
+		gWifiConnectJob.completedAtMs = millis();
+		if (gApEnabled) {
+			scheduleSoftAPStop(30000);
+			gWifiConnectJob.apStopScheduled = true;
+		}
+		gWifiConnectJob.password = "";
+		addLogf("WiFi connected via async job: %s", gWifiConnectJob.ip.c_str());
+		return;
+	}
+	if (millis() - gWifiConnectJob.startedAtMs < WIFI_STA_CONNECT_TIMEOUT_MS) {
+		return;
+	}
+	gWifiConnectJob.state = ASYNC_JOB_FAILED;
+	gWifiConnectJob.message = "connect_failed";
+	gWifiConnectJob.completedAtMs = millis();
+	gWifiConnectJob.password = "";
+	if (!gApEnabled) {
+		startSoftAPIfNeeded();
+		addLogf("SoftAP started after WiFi connect failure: %s @ %s", gApSsid.c_str(), WiFi.softAPIP().toString().c_str());
+	}
+	addLogf("WiFi connect failed for SSID: %s (status=%d)", gWifiConnectJob.ssid.c_str(), gWifiConnectJob.status);
+}
+
+static bool startWifiScanJob(String& errorMessage) {
+	if (gWifiScanJob.state == ASYNC_JOB_RUNNING) {
+		errorMessage = "scan_in_progress";
+		return false;
+	}
+	if (gWifiConnectJob.state == ASYNC_JOB_RUNNING) {
+		errorMessage = "connect_in_progress";
+		return false;
+	}
+	gWifiScanJob.state = ASYNC_JOB_RUNNING;
+	gWifiScanJob.message = "scanning";
+	gWifiScanJob.startedAtMs = millis();
+	gWifiScanJob.completedAtMs = 0;
+	gWifiScanJob.count = 0;
+	for (size_t i = 0; i < (sizeof(gWifiScanJob.results) / sizeof(gWifiScanJob.results[0])); ++i) {
+		gWifiScanJob.results[i].ssid = "";
+		gWifiScanJob.results[i].rssi = 0;
+		gWifiScanJob.results[i].secure = false;
+	}
+
+	const wifi_mode_t scanMode = gApEnabled ? WIFI_AP_STA : WIFI_STA;
+	WiFi.mode(scanMode);
+	delay(100);
+	BaseType_t created = xTaskCreatePinnedToCore(
+		[](void*) {
+			WiFi.scanDelete();
+			delay(25);
+			const int scanResult = WiFi.scanNetworks(false, false);
+			gWifiScanJob.completedAtMs = millis();
+			if (scanResult < 0) {
+				gWifiScanJob.state = ASYNC_JOB_FAILED;
+				gWifiScanJob.message = "scan_failed";
+				gWifiScanJob.count = 0;
+				addLogf("WiFi background scan failed: %d", scanResult);
+			} else {
+				gWifiScanJob.state = ASYNC_JOB_SUCCESS;
+				gWifiScanJob.message = "scan_complete";
+				const int limit = (scanResult > (int)(sizeof(gWifiScanJob.results) / sizeof(gWifiScanJob.results[0])))
+					? (int)(sizeof(gWifiScanJob.results) / sizeof(gWifiScanJob.results[0]))
+					: scanResult;
+				gWifiScanJob.count = limit;
+				for (int i = 0; i < limit; ++i) {
+					gWifiScanJob.results[i].ssid = WiFi.SSID(i);
+					gWifiScanJob.results[i].rssi = WiFi.RSSI(i);
+					gWifiScanJob.results[i].secure = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
+				}
+				addLogf("WiFi background scan complete: %d networks", scanResult);
+			}
+			WiFi.scanDelete();
+			gWifiScanTask = nullptr;
+			vTaskDelete(nullptr);
+		},
+		"WifiScan",
+		4096,
+		nullptr,
+		1,
+		&gWifiScanTask,
+		APP_TASK_CORE);
+	if (created != pdPASS) {
+		gWifiScanJob.state = ASYNC_JOB_FAILED;
+		gWifiScanJob.message = "scan_failed";
+		gWifiScanJob.completedAtMs = millis();
+		addLog("WiFi background scan task failed to start");
+		errorMessage = gWifiScanJob.message;
+		return false;
+	}
+	addLog("WiFi background scan started");
+	return true;
+}
+
+static void processWifiScanJob() {
+	if (gWifiScanJob.state != ASYNC_JOB_RUNNING) return;
+	if (gWifiScanTask != nullptr) return;
 }
 
 static void serveNoContent() {
@@ -1132,22 +1442,35 @@ void pollForToken() {
 	if (time(nullptr) < 1609459200) {
 		syncTime();
 	}
-	String payload = "client_id=" + String(paramClientIdValue) + "&grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=" + device_code;
+	String payload;
+	payload.reserve(strlen(paramClientIdValue) + device_code.length() + 96);
+	payload += F("client_id=");
+	payload += paramClientIdValue;
+	payload += F("&grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=");
+	payload += device_code;
 	DBG_PRINTLN("pollForToken()");
 	JsonDocument responseDoc;
 	boolean res = requestJsonApi(responseDoc, "https://login.microsoftonline.com/" + String(paramTenantValue) + "/oauth2/v2.0/token", payload, 0);
 	if (!res) {
-		state = SMODEDEVICELOGINFAILED;
+		gDeviceLoginTransientFailures++;
+		addLogf("Device login poll transient failure %u/%u", gDeviceLoginTransientFailures, DEVICE_LOGIN_TRANSIENT_FAILURE_LIMIT);
+		if (gDeviceLoginTransientFailures >= DEVICE_LOGIN_TRANSIENT_FAILURE_LIMIT) {
+			state = SMODEDEVICELOGINFAILED;
+		} else {
+			tsPolling = millis() + ((unsigned long)interval * 1000UL);
+		}
 	} else if (!responseDoc["error"].isNull()) {
 		const char* _error = responseDoc["error"];
 		const char* _error_description = responseDoc["error_description"];
 		if (strcmp(_error, "authorization_pending") == 0) {
+			gDeviceLoginTransientFailures = 0;
 			DBG_PRINT("pollForToken() - Wating for authorization by user: "); DBG_PRINTLN(_error_description);
 		} else {
 			DBG_PRINT("pollForToken() - Unexpected error: "); DBG_PRINT(_error); DBG_PRINT(", "); DBG_PRINTLN(_error_description);
 			state = SMODEDEVICELOGINFAILED;
 		}
 	} else {
+		gDeviceLoginTransientFailures = 0;
 	if (!responseDoc["access_token"].isNull() && !responseDoc["refresh_token"].isNull() && !responseDoc["id_token"].isNull()) {
 			// Save tokens and expiration
 			access_token = responseDoc["access_token"].as<String>();
@@ -1199,7 +1522,12 @@ boolean refreshToken() {
 		syncTime();
 	}
 	boolean success = false;
-	String payload = "client_id=" + String(paramClientIdValue) + "&grant_type=refresh_token&refresh_token=" + refresh_token;
+	String payload;
+	payload.reserve(strlen(paramClientIdValue) + refresh_token.length() + 48);
+	payload += F("client_id=");
+	payload += paramClientIdValue;
+	payload += F("&grant_type=refresh_token&refresh_token=");
+	payload += refresh_token;
 	DBG_PRINTLN(F("refreshToken()"));
 	JsonDocument responseDoc;
 	boolean res = requestJsonApi(responseDoc, "https://login.microsoftonline.com/" + String(paramTenantValue) + "/oauth2/v2.0/token", payload, 0);
@@ -1256,7 +1584,9 @@ void statemachine() {
 			}
 			if (millis() >= tsPolling) {
 				pollForToken();
-				tsPolling = millis() + (interval * 1000);
+				if (state == SMODEDEVICELOGINSTARTED && millis() >= tsPolling) {
+					tsPolling = millis() + ((unsigned long)interval * 1000UL);
+				}
 			}
 			break;
 
@@ -1390,6 +1720,8 @@ void setup()
 	} else {
 		ensureStatusLedReady();
 	}
+	const char* collectedHeaders[] = { "X-StatusGlow-Key", "X-OTA-Key", "Accept-Encoding" };
+	server.collectHeaders(collectedHeaders, 3);
 	loadEffectsConfig();
 	loadWifiPrefs();
 	
@@ -1534,7 +1866,12 @@ void setup()
 		serveStaticPageOr500("/index.html");
 	});
 	server.on("/setup.html", HTTP_ANY, [] {
-		serveSetupPortalPage();
+		if (isSetupPortalActive()) {
+			serveSetupPortalPage();
+			return;
+		}
+		if (!requireAdminAuth()) return;
+		serveStaticPageOr500("/index.html");
 	});
 	server.on("/app.css", HTTP_ANY, [] {
 		serveStaticAssetOr404("/app.css");
@@ -1577,15 +1914,14 @@ void setup()
 		d["uptime_ms"] = millis();
 		d["cpu"] = (int)ESP.getCpuFreqMHz();
 		d["heap_free"] = (int)ESP.getFreeHeap();
-		server.send(200, "application/json", d.as<String>());
+		sendJsonDocument(200, d);
 	});
 	server.on("/api/ota_last", HTTP_GET, [] {
 		if (!requireOtaAuth()) return;
 		File f = SPIFFS.open("/ota_last.txt", "r");
-		if (!f) { server.send(404, "text/plain", "no_ota_log"); return; }
-		String s; while (f.available()) { s += (char)f.read(); }
+		if (!f) { sendApiError(404, "no_ota_log", "No OTA log has been saved yet."); return; }
+		server.streamFile(f, "text/plain; charset=utf-8");
 		f.close();
-		server.send(200, "text/plain; charset=utf-8", s);
 	});
 	server.on("/config", HTTP_ANY, [] {
 		if (isSetupPortalActive()) {
@@ -1639,111 +1975,78 @@ void setup()
 		d["ap_enabled"] = gApEnabled;
 		d["host_name"] = gThingHostName.c_str();
 		d["host_local"] = String(gThingHostName) + ".local";
-		server.send(200, "application/json", d.as<String>());
+		JsonObject connect = d["connect"].to<JsonObject>();
+		fillWifiConnectJobJson(connect);
+		sendJsonDocument(200, d);
 	});
 	server.on("/api/wifi", HTTP_POST, [] {
 		if (!isSetupPortalActive() && !requireAdminAuth()) return;
-		String body = server.arg("plain");
-		JsonDocument doc; DeserializationError err = deserializeJson(doc, body);
-		if (err) { server.send(400, "application/json", F("{\"ok\":false,\"error\":\"invalid_json\"}")); return; }
+		JsonDocument doc;
+		if (!parseJsonBody(doc)) return;
 		String ssid = doc["ssid"].as<String>();
 		ssid.trim();
 		String pass = doc["password"].as<String>();
-		if (ssid.length() == 0) { server.send(400, "application/json", F("{\"ok\":false,\"error\":\"missing_ssid\"}")); return; }
-		const wifi_mode_t targetMode = gApEnabled ? WIFI_AP_STA : WIFI_STA;
-		WiFi.mode(targetMode);
-		delay(100);
-		WiFi.persistent(true);
-		WiFi.begin(ssid.c_str(), pass.c_str());
-		unsigned long start = millis();
-		while (WiFi.status() != WL_CONNECTED && millis() - start < WIFI_STA_CONNECT_TIMEOUT_MS) {
-			delay(250);
-		}
 		JsonDocument resp;
-		if (WiFi.status() == WL_CONNECTED) {
-			onWifiConnected();
-			strlcpy(paramWifiSsidValue, ssid.c_str(), sizeof(paramWifiSsidValue));
-			strlcpy(paramWifiPasswordValue, pass.c_str(), sizeof(paramWifiPasswordValue));
-			saveWifiPrefs(paramWifiSsidValue, paramWifiPasswordValue);
-			saveAppConfig();
-			resp["ok"] = true;
-			resp["ip"] = WiFi.localIP().toString();
-			resp["ssid"] = WiFi.SSID();
-			resp["saved_ssid"] = paramWifiSsidValue;
-			resp["host_name"] = gThingHostName.c_str();
-			resp["host_local"] = String(gThingHostName) + ".local";
-			resp["message"] = "connected";
-			if (gApEnabled) {
-				resp["ap_stopping"] = true;
-				resp["ap_stop_delay_ms"] = 30000;
-				scheduleSoftAPStop(30000);
-			}
-			addLogf("WiFi connected via /api/wifi: %s", WiFi.localIP().toString().c_str());
-		} else {
+		String errorMessage;
+		if (!startWifiConnectJob(ssid, pass, errorMessage)) {
 			resp["ok"] = false;
-			resp["status"] = (int)WiFi.status();
-			resp["message"] = "connect_failed";
-			addLog("WiFi connect via /api/wifi failed");
+			resp["message"] = errorMessage;
+			fillWifiConnectJobJson(resp["connect"].to<JsonObject>());
+			sendJsonDocument(errorMessage == "missing_ssid" ? 400 : 409, resp);
+			return;
 		}
-		server.send(200, "application/json", resp.as<String>());
+		resp["ok"] = true;
+		resp["message"] = "connect_started";
+		resp["host_name"] = gThingHostName.c_str();
+		resp["host_local"] = String(gThingHostName) + ".local";
+		fillWifiConnectJobJson(resp["connect"].to<JsonObject>());
+		sendJsonDocument(202, resp);
 	});
 	server.on("/api/wifi_scan", HTTP_GET, [] {
 		if (!isSetupPortalActive() && !requireAdminAuth()) return;
-		const wifi_mode_t scanMode = gApEnabled ? WIFI_AP_STA : WIFI_STA;
-		WiFi.mode(scanMode);
-		delay(100);
-		WiFi.scanDelete();
-		delay(25);
-		uint32_t startMs = millis();
-		int16_t found = WiFi.scanNetworks();
 		JsonDocument doc;
-		if (found < 0) {
+		doc["ok"] = (gWifiScanJob.state == ASYNC_JOB_SUCCESS);
+		fillWifiScanJobJson(doc);
+		sendJsonDocument(200, doc);
+	});
+	server.on("/api/wifi_scan", HTTP_POST, [] {
+		if (!isSetupPortalActive() && !requireAdminAuth()) return;
+		JsonDocument doc;
+		String errorMessage;
+		if (!startWifiScanJob(errorMessage)) {
 			doc["ok"] = false;
-			doc["error"] = "scan_failed";
-			doc["count"] = (int)found;
-			doc["duration_ms"] = (uint32_t)(millis() - startMs);
-			addLogf("WiFi scan failed: %d", (int)found);
-			server.send(200, "application/json", doc.as<String>());
+			doc["message"] = errorMessage;
+			fillWifiScanJobJson(doc);
+			sendJsonDocument(409, doc);
 			return;
 		}
 		doc["ok"] = true;
-		doc["count"] = (int)found;
-		doc["duration_ms"] = (uint32_t)(millis() - startMs);
-		JsonArray arr = doc["networks"].to<JsonArray>();
-		const int maxNetworks = 20;
-		int limit = (found > maxNetworks) ? maxNetworks : found;
-		for (int i = 0; i < limit; ++i) {
-			JsonObject o = arr.add<JsonObject>();
-			o["ssid"] = WiFi.SSID(i);
-			o["rssi"] = WiFi.RSSI(i);
-			o["secure"] = (WiFi.encryptionType(i) != WIFI_AUTH_OPEN);
-		}
-		WiFi.scanDelete();
-		addLogf("WiFi scan complete: %d networks", (int)found);
-		server.send(200, "application/json", doc.as<String>());
+		doc["message"] = "scan_started";
+		fillWifiScanJobJson(doc);
+		sendJsonDocument(202, doc);
 	});
 	server.on("/api/ap_start", HTTP_POST, [] {
 		if (!requireAdminAuth()) return;
 		startSoftAPIfNeeded();
-		JsonDocument d; d["ok"] = true; d["ap_ip"] = WiFi.softAPIP().toString(); d["ap_ssid"] = gApSsid.c_str(); d["ap_enabled"] = gApEnabled; server.send(200, "application/json", d.as<String>());
+		JsonDocument d; d["ok"] = true; d["ap_ip"] = WiFi.softAPIP().toString(); d["ap_ssid"] = gApSsid.c_str(); d["ap_enabled"] = gApEnabled; sendJsonDocument(200, d);
         addLogf("AP started: %s @ %s", gApSsid.c_str(), WiFi.softAPIP().toString().c_str());
 	});
 	server.on("/api/ap_stop", HTTP_POST, [] {
 		if (!requireAdminAuth()) return;
 		stopSoftAPIfActive();
-		JsonDocument d; d["ok"] = true; d["ap_enabled"] = gApEnabled; server.send(200, "application/json", d.as<String>());
+		JsonDocument d; d["ok"] = true; d["ap_enabled"] = gApEnabled; sendJsonDocument(200, d);
         addLog("AP stopped");
 	});
 	server.on("/api/reboot", HTTP_POST, [] {
 		if (!requireAdminAuth()) return;
 		addLog("Reboot requested via API");
-		server.send(200, "application/json", F("{\"ok\":true,\"message\":\"Rebooting...\"}"));
+		sendApiOk(200, "Rebooting...");
 		delay(500);  // Give time for response to be sent
 		ESP.restart();
 	});
 	server.on("/api/ap_state", HTTP_GET, [] {
 		if (!requireAdminAuth()) return;
-		JsonDocument d; d["ap_enabled"] = gApEnabled; d["ap_ip"] = WiFi.softAPIP().toString(); d["ap_ssid"] = gApSsid.c_str(); server.send(200, "application/json", d.as<String>());
+		JsonDocument d; d["ap_enabled"] = gApEnabled; d["ap_ip"] = WiFi.softAPIP().toString(); d["ap_ssid"] = gApSsid.c_str(); sendJsonDocument(200, d);
 	});
 	server.on("/api/logs", HTTP_GET, [] {
 		if (!requireAdminAuth()) return;
@@ -1766,13 +2069,12 @@ void setup()
 		server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
 		server.sendHeader("Pragma", "no-cache");
 		server.sendHeader("Expires", "0");
-		server.send(200, "application/json", d.as<String>());
+		sendJsonDocument(200, d);
 	});
 	server.on("/api/settings", HTTP_POST, [] {
 		if (!requireAdminAuth()) return;
-		String body = server.arg("plain");
-		JsonDocument doc; DeserializationError err = deserializeJson(doc, body);
-		if (err) { server.send(400, "application/json", F("{\"ok\":false,\"error\":\"invalid_json\"}")); return; }
+		JsonDocument doc;
+		if (!parseJsonBody(doc)) return;
 		bool needsReboot = false;
 		if (!doc["client_id"].isNull()) { strlcpy(paramClientIdValue, doc["client_id"], sizeof(paramClientIdValue)); }
 		if (!doc["tenant"].isNull()) { strlcpy(paramTenantValue, doc["tenant"], sizeof(paramTenantValue)); }
@@ -1798,9 +2100,9 @@ void setup()
 		JsonDocument resp; 
 		resp["ok"] = true; 
 		resp["needs_reboot"] = needsReboot;
-		server.send(200, "application/json", resp.as<String>());
+		sendJsonDocument(200, resp);
 	});
-	server.on("/api/clearSettings", HTTP_GET, [] {
+	server.on("/api/clearSettings", HTTP_POST, [] {
 		if (!requireAdminAuth()) return;
 		handleClearSettings();
 	});
@@ -1823,14 +2125,12 @@ void setup()
 				o["fade_ms"] = gProfiles[i].fadeMs;
 				o["bri"] = gProfiles[i].bri;
 			}
-			server.send(200, "application/json", doc.as<String>());
+			sendJsonDocument(200, doc);
 		});
 		server.on("/api/effects", HTTP_POST, [] {
 			if (!requireAdminAuth()) return;
-			String body = server.arg("plain");
 			JsonDocument doc;
-			DeserializationError err = deserializeJson(doc, body);
-			if (err) { server.send(400, "application/json", F("{\"ok\":false,\"error\":\"invalid_json\"}")); return; }
+			if (!parseJsonBody(doc)) return;
 			if (!doc["fade_ms"].isNull()) {
 				gFadeDurationMs = (uint16_t)doc["fade_ms"].as<unsigned int>();
 			}
@@ -1868,14 +2168,12 @@ void setup()
 				}
 			}
 			saveEffectsConfig();
-			server.send(200, "application/json", F("{\"ok\":true}"));
+			sendApiOk(200);
 		});
 		server.on("/api/preview", HTTP_POST, [] {
 			if (!requireAdminAuth()) return;
-			String body = server.arg("plain");
 			JsonDocument doc;
-			DeserializationError err = deserializeJson(doc, body);
-			if (err) { server.send(400, "application/json", F("{\"ok\":false,\"error\":\"invalid_json\"}")); return; }
+			if (!parseJsonBody(doc)) return;
 			uint16_t mode = FX_MODE_STATIC; uint32_t color = RED; uint16_t speed = 3000; bool reverse = false; uint16_t perFade = 0; uint8_t perBri = 0;
 			if (!doc["key"].isNull()) {
 				EffectProfile* p = findProfile(doc["key"].as<String>());
@@ -1898,15 +2196,13 @@ void setup()
 			gNextTargetBri = perBri;
 			EFFECTS_UNLOCK();
 			setAnimation(0, mode, color, speed, reverse);
-			server.send(200, "application/json", F("{\"ok\":true}"));
+			sendApiOk(200);
 		});
 		server.on("/api/leds", HTTP_POST, [] {
 			if (!requireAdminAuth()) return;
-			String body = server.arg("plain");
 			JsonDocument doc;
-			DeserializationError err = deserializeJson(doc, body);
-			if (err) { server.send(400, "application/json", F("{\"ok\":false,\"error\":\"invalid_json\"}")); return; }
-			if (doc["num_leds"].isNull()) { server.send(400, "application/json", F("{\"ok\":false,\"error\":\"missing_num_leds\"}")); return; }
+			if (!parseJsonBody(doc)) return;
+			if (doc["num_leds"].isNull()) { sendApiError(400, "missing_num_leds", "Provide the LED count to apply."); return; }
 			int n = (int)doc["num_leds"].as<int>();
 			if (n < 1) n = 1; if (n > 1024) n = 1024;
 			numberLeds = n;
@@ -1914,7 +2210,7 @@ void setup()
 			effects.setLength(numberLeds);
 			EFFECTS_UNLOCK();
 		saveAppConfig();
-			JsonDocument resp; resp["ok"] = true; resp["num_leds"] = numberLeds; server.send(200, "application/json", resp.as<String>());
+			JsonDocument resp; resp["ok"] = true; resp["num_leds"] = numberLeds; sendJsonDocument(200, resp);
 		});
 		server.on("/api/modes", HTTP_GET, [] {
 			if (!requireAdminAuth()) return;
@@ -1926,17 +2222,16 @@ void setup()
 				o["id"] = i;
 				o["name"] = effects.getModeName(i);
 			}
-			server.send(200, "application/json", doc.as<String>());
+			sendJsonDocument(200, doc);
 		});
 		server.on("/api/preview_state", HTTP_GET, [] {
 			if (!requireAdminAuth()) return;
-			JsonDocument d; d["enabled"] = gPreviewMode; d["key"] = gPreviewKey.c_str(); server.send(200, "application/json", d.as<String>());
+			JsonDocument d; d["enabled"] = gPreviewMode; d["key"] = gPreviewKey.c_str(); sendJsonDocument(200, d);
 		});
 		server.on("/api/preview_mode", HTTP_POST, [] {
 			if (!requireAdminAuth()) return;
-			String body = server.arg("plain");
-			JsonDocument doc; DeserializationError err = deserializeJson(doc, body);
-			if (err) { server.send(400, "application/json", F("{\"ok\":false,\"error\":\"invalid_json\"}")); return; }
+			JsonDocument doc;
+			if (!parseJsonBody(doc)) return;
 			bool en = doc["enabled"].as<bool>();
 			gPreviewMode = en;
 			if (gPreviewMode) {
@@ -1944,19 +2239,18 @@ void setup()
 			} else {
 				setPresenceAnimation();
 			}
-			JsonDocument resp; resp["ok"] = true; resp["enabled"] = gPreviewMode; resp["key"] = gPreviewKey.c_str(); server.send(200, "application/json", resp.as<String>());
+			JsonDocument resp; resp["ok"] = true; resp["enabled"] = gPreviewMode; resp["key"] = gPreviewKey.c_str(); sendJsonDocument(200, resp);
 		});
 		server.on("/api/preview_select", HTTP_POST, [] {
 			if (!requireAdminAuth()) return;
-			String body = server.arg("plain");
-			JsonDocument doc; DeserializationError err = deserializeJson(doc, body);
-			if (err) { server.send(400, "application/json", F("{\"ok\":false,\"error\":\"invalid_json\"}")); return; }
-			if (doc["key"].isNull()) { server.send(400, "application/json", F("{\"ok\":false,\"error\":\"missing_key\"}")); return; }
+			JsonDocument doc;
+			if (!parseJsonBody(doc)) return;
+			if (doc["key"].isNull()) { sendApiError(400, "missing_key", "Provide the preview profile key to select."); return; }
 			String k = doc["key"].as<String>();
-			if (!findProfile(k)) { server.send(404, "application/json", F("{\"ok\":false,\"error\":\"unknown_key\"}")); return; }
+			if (!findProfile(k)) { sendApiError(404, "unknown_key", "The requested preview profile key does not exist."); return; }
 			gPreviewKey = k;
 			if (gPreviewMode) applyPreviewSelection();
-			JsonDocument resp; resp["ok"] = true; resp["enabled"] = gPreviewMode; resp["key"] = gPreviewKey.c_str(); server.send(200, "application/json", resp.as<String>());
+			JsonDocument resp; resp["ok"] = true; resp["enabled"] = gPreviewMode; resp["key"] = gPreviewKey.c_str(); sendJsonDocument(200, resp);
 		});
 		server.on("/api/current", HTTP_GET, [] {
 			if (!requireAdminAuth()) return;
@@ -1968,7 +2262,7 @@ void setup()
 			d["speed"] = ((float)gTarget.speed) / 1000.0f;
 			d["reverse"] = gTarget.reverse;
 			d["brightness"] = effects.getBrightness();
-			server.send(200, "application/json", d.as<String>());
+			sendJsonDocument(200, d);
 		});
 	server.on("/fs/delete", HTTP_DELETE, []() {
 		if (!requireAdminAuth()) return;
@@ -1980,7 +2274,7 @@ void setup()
 	});
 	server.on("/fs/upload", HTTP_POST, []() {
 		if (!requireAdminAuth()) return;
-		server.send(200, "text/plain", "");
+		sendApiOk(200);
 	}, handleFileUpload);
 		server.on("/effects", HTTP_ANY, []() {
 			if (isSetupPortalActive()) {
@@ -1990,15 +2284,13 @@ void setup()
 			if (!requireAdminAuth()) return;
 			serveStaticPageOr500("/index.html");
 		});
-	server.serveStatic("/", SPIFFS, "/");
 	server.onNotFound([]() {
 		if (shouldRedirectToCaptivePortal()) {
 			handleCaptivePortalRequest();
 			return;
 		}
-		if (!handleFileRead(server.uri())) {
-			server.send(404, "text/plain", "FileNotFound");
-		}
+		if (isAllowedPublicAssetPath(server.uri()) && handleFileRead(server.uri())) return;
+		server.send(404, "text/plain", "FileNotFound");
 	});
 	server.begin();
 	DBG_PRINTLN(F("setup() ready..."));
@@ -2093,6 +2385,8 @@ void updateStatusLed() {
 void loop()
 {
 	if (gApEnabled) dnsServer.processNextRequest();
+	processWifiConnectJob();
+	processWifiScanJob();
 	server.handleClient();
 	processPendingSoftAPStop();
 	updateStatusLed();

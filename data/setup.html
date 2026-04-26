@@ -105,13 +105,54 @@
       }
     }
 
+    function sleep(ms) {
+      return new Promise(function (resolve) {
+        window.setTimeout(resolve, ms);
+      });
+    }
+
+    async function pollWifiConnectionStatus() {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 30000) {
+        const state = await fetchJson("/api/wifi", { cache: "no-store" });
+        if (!state.connect || state.connect.state !== "running") {
+          return state;
+        }
+        setText("result", "Connecting...");
+        await sleep(750);
+      }
+      throw new Error("connect_timeout");
+    }
+
+    async function pollWifiScanStatus() {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 30000) {
+        const state = await fetchJson("/api/wifi_scan", { cache: "no-store" });
+        if (state.state !== "running") {
+          return state;
+        }
+        setText("scan-status", "Scanning for networks...");
+        await sleep(500);
+      }
+      throw new Error("scan_timeout");
+    }
+
+    function isConflictError(err, code) {
+      return !!(err && err.status === 409 && (err.message === code || (err.data && err.data.message === code)));
+    }
+
     async function scanNetworks() {
       const button = document.getElementById("scan-btn");
       button.disabled = true;
       button.textContent = "Scanning...";
       setText("scan-status", "Scanning for networks...");
       try {
-        const result = await fetchJson("/api/wifi_scan", { cache: "no-store" });
+        try {
+          await fetchJson("/api/wifi_scan", { method: "POST" });
+        } catch (err) {
+          if (!isConflictError(err, "scan_in_progress")) throw err;
+        }
+        const result = await pollWifiScanStatus();
         const networks = Array.isArray(result.networks) ? result.networks : [];
         populateNetworks(networks);
         setText("scan-status", networks.length ? ("Found " + networks.length + " network" + (networks.length === 1 ? "." : "s.")) : "No networks found.");
@@ -128,25 +169,30 @@
       const result = document.getElementById("result");
       setText("result", "Connecting...");
       try {
-        const response = await fetchJson("/api/wifi", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ssid: (document.getElementById("ssid").value || "").trim(),
-            password: document.getElementById("password").value || ""
-          })
-        });
+        try {
+          await fetchJson("/api/wifi", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ssid: (document.getElementById("ssid").value || "").trim(),
+              password: document.getElementById("password").value || ""
+            })
+          });
+        } catch (err) {
+          if (!isConflictError(err, "connect_in_progress")) throw err;
+        }
+        const response = await pollWifiConnectionStatus();
 
-        if (response && response.ok) {
+        if (response && response.connect && response.connect.state === "success") {
           const pieces = [
             "Connected to " + (response.ssid || "Wi-Fi") + ".",
-            "Device IP: http://" + response.ip + "/"
+            "Device IP: http://" + response.sta_ip + "/"
           ];
           if (response.host_local) {
             pieces.push("Hostname: http://" + response.host_local + "/");
           }
-          if (response.ap_stopping) {
-            pieces.push("The setup AP will stay up for about " + Math.round((response.ap_stop_delay_ms || 0) / 1000) + " seconds while you switch back to your normal Wi-Fi.");
+          if (response.connect.ap_stop_scheduled) {
+            pieces.push("The setup AP will stay up briefly while you switch back to your normal Wi-Fi.");
           }
           setText("result", pieces.join(" "));
           setTimeout(function () {

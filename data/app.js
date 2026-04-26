@@ -457,6 +457,43 @@
     if (sorted.length && !$("cfg-ssid").value) $("cfg-ssid").value = sorted[0].ssid;
   }
 
+  function sleep(ms) {
+    return new Promise(function (resolve) {
+      window.setTimeout(resolve, ms);
+    });
+  }
+
+  async function pollWifiConnectionStatus() {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 30000) {
+      const wifi = await fetchJson("/api/wifi", { cache: "no-store" });
+      const connect = wifi && wifi.connect ? wifi.connect : {};
+      if (connect.state !== "running") {
+        return wifi;
+      }
+      setMessage("cfg-status", "Connecting to Wi-Fi...");
+      await sleep(750);
+    }
+    throw new Error("connect_timeout");
+  }
+
+  async function pollWifiScanStatus() {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < 30000) {
+      const scan = await fetchJson("/api/wifi_scan", { cache: "no-store" });
+      if (scan.state !== "running") {
+        return scan;
+      }
+      safeText($("cfg-wifi-scan-status"), "Scanning for networks...");
+      await sleep(500);
+    }
+    throw new Error("scan_timeout");
+  }
+
+  function isConflictError(err, code) {
+    return !!(err && err.status === 409 && (err.message === code || (err.data && err.data.message === code)));
+  }
+
   async function initConfig() {
     if (!APP.refreshers.config) {
       APP.refreshers.config = async function () {
@@ -496,18 +533,24 @@
       $("cfg-connect-btn").addEventListener("click", async function () {
         setMessage("cfg-status", "Connecting to Wi-Fi...");
         try {
-          const result = await fetchJson("/api/wifi", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              ssid: ($("cfg-ssid").value || "").trim(),
-              password: $("cfg-wifi-password").value || ""
-            })
-          });
+          try {
+            await fetchJson("/api/wifi", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                ssid: ($("cfg-ssid").value || "").trim(),
+                password: $("cfg-wifi-password").value || ""
+              })
+            });
+          } catch (err) {
+            if (!isConflictError(err, "connect_in_progress")) throw err;
+          }
+          const wifi = await pollWifiConnectionStatus();
           await loadWifiState();
-          if (result && result.ok) {
-            const hostPart = result.host_local ? " Hostname: http://" + result.host_local + "/" : "";
-            setMessage("cfg-status", "Connected to " + (result.ssid || "Wi-Fi") + ". IP: http://" + result.ip + "/" + hostPart);
+          const connect = wifi && wifi.connect ? wifi.connect : {};
+          if (connect.state === "success") {
+            const hostPart = wifi.host_local ? " Hostname: http://" + wifi.host_local + "/" : "";
+            setMessage("cfg-status", "Connected to " + (wifi.ssid || "Wi-Fi") + ". IP: http://" + wifi.sta_ip + "/" + hostPart);
           } else {
             setMessage("cfg-status", "Wi-Fi connection failed. Please verify the SSID and password.", true);
           }
@@ -532,7 +575,12 @@
         safeText($("cfg-wifi-scan-status"), "Scanning for networks...");
         $("cfg-wifi-scan-status").style.color = "";
         try {
-          const result = await fetchJson("/api/wifi_scan", { cache: "no-store" });
+          try {
+            await fetchJson("/api/wifi_scan", { method: "POST" });
+          } catch (err) {
+            if (!isConflictError(err, "scan_in_progress")) throw err;
+          }
+          const result = await pollWifiScanStatus();
           const networks = Array.isArray(result.networks) ? result.networks : [];
           populateWifiOptions(networks);
           safeText($("cfg-wifi-scan-status"), networks.length ? "Found " + networks.length + " network" + (networks.length === 1 ? "." : "s.") : "No networks found.");
@@ -589,7 +637,7 @@
       $("cfg-reset-confirm-btn").addEventListener("click", async function (event) {
         event.preventDefault();
         try {
-          await fetchJson("/api/clearSettings", { cache: "no-store" });
+          await fetchJson("/api/clearSettings", { method: "POST", cache: "no-store" });
           $("cfg-reset-dialog").close();
           $("cfg-reset-result-dialog").showModal();
         } catch (err) {
@@ -984,7 +1032,15 @@
       $("fw-ota-dialog").showModal();
       try {
         const response = await authFetch("/api/ota_last", { cache: "no-store" });
-        const text = response.status === 404 ? "No OTA log saved yet." : await response.text();
+        const text = await response.text();
+        let data = null;
+        try {
+          data = text ? JSON.parse(text) : null;
+        } catch (err) {}
+        if (response.status === 404) {
+          safeText($("fw-ota-log"), data && data.message ? data.message : "No OTA log saved yet.");
+          return;
+        }
         const trimmed = (text || "").trim();
         safeText($("fw-ota-log"), trimmed ? text : "No OTA log saved yet.");
       } catch (err) {

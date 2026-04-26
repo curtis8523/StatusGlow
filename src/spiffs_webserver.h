@@ -4,6 +4,21 @@
 extern bool isAdminRequestAuthorized();
 
 static File gFsUploadFile;
+static String gFsUploadTargetPath;
+
+static String normalizeSpiffsPath(String path) {
+	path.replace('\\', '/');
+	path.trim();
+	if (path.length() == 0) path = "/";
+	if (!path.startsWith("/")) path = "/" + path;
+	while (path.indexOf("//") >= 0) {
+		path.replace("//", "/");
+	}
+	if (path.indexOf("..") >= 0) {
+		return String();
+	}
+	return path;
+}
 
 bool exists(String path) {
 	// Correct existence check: ensure the file handle is valid before testing directory flag
@@ -25,6 +40,7 @@ void handleMinimalUpload() {
 		keyField = String("<input type=\"hidden\" name=\"key\" value=\"") + htmlEscape(server.arg("key")) + "\">";
 	}
 	String page;
+	page.reserve(512 + keyField.length());
 	page += F("<!DOCTYPE html><html><head><title>Upload to SPIFFS</title><meta charset=\"utf-8\"><meta http-equiv=\"X-UA-Compatible\" content=\"IE=edge\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"></head><body><form action=\"/fs/upload\" method=\"post\" enctype=\"multipart/form-data\"><input type=\"file\" name=\"data\"><input type=\"text\" name=\"path\" value=\"/\">");
 	page += keyField;
 	page += F("<button>Upload</button></form></body></html>");
@@ -36,17 +52,31 @@ void handleFileUpload() {
 
 	HTTPUpload &upload = server.upload();
 	if (upload.status == UPLOAD_FILE_START) {
-		String filename = upload.filename;
-		if (!filename.startsWith("/")) {
-			filename = "/" + filename;
+		String filename = normalizeSpiffsPath(upload.filename);
+		String requestedPath = normalizeSpiffsPath(server.arg("path"));
+		if (filename.length() == 0) {
+			return;
+		}
+		if (requestedPath.length() == 0) {
+			requestedPath = "/";
+		}
+		if (requestedPath.endsWith("/")) {
+			gFsUploadTargetPath = requestedPath + filename.substring(1);
+		} else if (requestedPath == "/") {
+			gFsUploadTargetPath = filename;
+		} else {
+			gFsUploadTargetPath = requestedPath;
+		}
+		gFsUploadTargetPath = normalizeSpiffsPath(gFsUploadTargetPath);
+		if (gFsUploadTargetPath.length() == 0 || gFsUploadTargetPath == "/") {
+			return;
 		}
 		DBG_PRINT("handleFileUpload Name: ");
-		DBG_PRINTLN(filename);
+		DBG_PRINTLN(gFsUploadTargetPath);
 		if (gFsUploadFile) {
 			gFsUploadFile.close();
 		}
-		gFsUploadFile = SPIFFS.open(filename, "w");
-		filename = String();
+		gFsUploadFile = SPIFFS.open(gFsUploadTargetPath, "w");
 	} else if (upload.status == UPLOAD_FILE_WRITE) {
 		if (gFsUploadFile) {
 			gFsUploadFile.write(upload.buf, upload.currentSize);
@@ -55,6 +85,10 @@ void handleFileUpload() {
 		if (gFsUploadFile) {
 			gFsUploadFile.close();
 		}
+		if (upload.status == UPLOAD_FILE_ABORTED && gFsUploadTargetPath.length()) {
+			SPIFFS.remove(gFsUploadTargetPath);
+		}
+		gFsUploadTargetPath = "";
 		DBG_PRINT("handleFileUpload Size: ");
 		DBG_PRINTLN(upload.totalSize);
 	}
@@ -62,24 +96,27 @@ void handleFileUpload() {
 
 void handleFileDelete() {
 	if (server.args() == 0) {
-		return server.send(500, "text/plain", "BAD ARGS");
+		sendApiError(400, "missing_path", "Provide the SPIFFS path to delete.");
+		return;
 	}
 	String path = server.arg(0);
 	DBG_PRINTLN("handleFileDelete: " + path);
 	if (path == "/") {
-		return server.send(500, "text/plain", "BAD PATH");
+		sendApiError(400, "invalid_path", "Refusing to delete the SPIFFS root.");
+		return;
 	}
 	if (!exists(path)) {
-		return server.send(404, "text/plain", "FileNotFound");
+		sendApiError(404, "file_not_found", "The requested SPIFFS path does not exist.");
+		return;
 	}
 	SPIFFS.remove(path);
-	server.send(200, "text/plain", "");
+	sendApiOk(200);
 	path = String();
 }
 
 void handleFileList() {
 	if (!server.hasArg("dir")) {
-		server.send(500, "text/plain", "BAD ARGS");
+		sendApiError(400, "missing_dir", "Provide a SPIFFS directory path to list.");
 		return;
 	}
 
@@ -88,23 +125,21 @@ void handleFileList() {
 
 	File root = SPIFFS.open(path);
 	path = String();
-	String output = "[";
-	if (root.isDirectory()) {
-		File file = root.openNextFile();
-		while (file) {
-			if (output != "[") {
-				output += ',';
-			}
-			output += "{\"type\":\"";
-			output += (file.isDirectory()) ? "dir" : "file";
-			output += "\",\"name\":\"";
-			output += String(file.name()).substring(1);
-			output += "\"}";
-			file = root.openNextFile();
-		}
+	if (!root || !root.isDirectory()) {
+		sendApiError(404, "dir_not_found", "The requested SPIFFS directory does not exist.");
+		return;
 	}
-	output += "]";
-	server.send(200, "application/json", output);
+	JsonDocument doc;
+	JsonArray files = doc.to<JsonArray>();
+	File file = root.openNextFile();
+	while (file) {
+		JsonObject entry = files.add<JsonObject>();
+		entry["type"] = file.isDirectory() ? "dir" : "file";
+		const char* fileName = file.name();
+		entry["name"] = (fileName && fileName[0] == '/') ? (fileName + 1) : fileName;
+		file = root.openNextFile();
+	}
+	sendJsonDocument(200, doc);
 }
 
 String getContentType(String filename) {
@@ -148,8 +183,13 @@ bool handleFileRead(String path) {
 	String contentType = getContentType(path);
 	String servedPath = path;
 	String pathWithGz = path + ".gz";
-	if (exists(pathWithGz) || exists(path)) {
-		if (exists(pathWithGz)) {
+	String acceptEncoding = server.header("Accept-Encoding");
+	acceptEncoding.toLowerCase();
+	const bool clientAcceptsGzip = acceptEncoding.indexOf("gzip") >= 0;
+	const bool hasGzipVariant = exists(pathWithGz);
+	const bool serveGzip = hasGzipVariant && clientAcceptsGzip;
+	if (serveGzip || exists(path)) {
+		if (serveGzip) {
 			servedPath += ".gz";
 		}
 		if (contentType == "text/html") {
@@ -158,6 +198,9 @@ bool handleFileRead(String path) {
 			server.sendHeader("Expires", "0");
 		} else {
 			server.sendHeader("Cache-Control", "public, max-age=86400");
+		}
+		if (serveGzip) {
+			server.sendHeader("Vary", "Accept-Encoding");
 		}
 		File file = SPIFFS.open(servedPath, "r");
 		server.streamFile(file, contentType);
