@@ -14,6 +14,7 @@ It is set up for:
 - Lets you change RGB/RGBW mode at runtime
 - Hosts a local web UI for config, effects, logs, and firmware upload
 - Falls back to a local AP when Wi-Fi is not configured
+- Stores Wi-Fi, app settings, effects, and Microsoft auth context in ESP32 NVS so they survive normal flashes and `uploadfs`
 - Supports an onboard status LED on ESP32-S3 boards that have one on GPIO21
 
 ## Default Hardware Settings
@@ -44,26 +45,29 @@ pio run -e waveshare_esp32s3_zero -t upload
 
 `uploadfs` pushes the static web UI and assets from `data/`.
 
+Use both `upload` and `uploadfs` after frontend changes. For firmware-only changes, `upload` is enough.
+
 ## First-Time Setup
 
 1. Flash firmware.
 2. Connect to the device AP.
 3. The captive portal should open the Wi-Fi setup page automatically. If it does not, open `http://192.168.4.1/setup`.
-4. Enter Wi-Fi and Microsoft app details.
-5. Start device login and complete the Microsoft sign-in flow.
-6. Save settings and reboot if prompted.
+4. Enter Wi-Fi credentials on the setup page and connect the device to your normal network.
+5. Open the full web UI on the device LAN IP or `.local` hostname.
+6. Enter Microsoft app details, start device login, and complete the sign-in flow.
+7. Save settings and reboot if prompted.
 
 ### Access Point
 
 If the device does not have working Wi-Fi, it starts its own AP:
 
-- SSID: `StatusGlow-XXXX`
-- Password: `statusglow-xxxx`
+- SSID: `StatusGlow-XXXXXX`
+- Password: `statusglow-xxxxxx`
 - IP: `http://192.168.4.1`
 
 When you join that AP, the device also runs a captive portal and redirects common phone/laptop Wi-Fi setup checks to a dedicated Wi-Fi setup page.
 
-`XXXX` is the last two octets of the device MAC address in hex. The same suffix is also added to the device hostname, so the device will show up with a matching name like `statusglow-ab12.local`.
+`XXXXXX` is the last three octets of the Wi-Fi MAC address in hex. The same suffix is also added to the device hostname, so the device will show up with a matching name like `statusglow-fc4a58.local`.
 
 ## Web UI Security
 
@@ -74,6 +78,8 @@ http://192.168.4.1
 ```
 
 If you want to add protection later, set `ADMIN_SHARED_KEY` and optionally `OTA_SHARED_KEY` in [src/config.h](src/config.h).
+
+In fallback AP mode, the device serves a dedicated Wi-Fi setup portal first. Once it is connected to normal Wi-Fi, the full admin UI is available from the device IP or `.local` hostname.
 
 ## Microsoft Teams Setup
 
@@ -106,7 +112,7 @@ Then click `Start device login`, open the Microsoft device login page, and compl
 - [src/main.cpp](src/main.cpp): firmware logic and API routes
 - [src/request_handler.h](src/request_handler.h): API helpers and Microsoft device-login handlers
 - [src/spiffs_webserver.h](src/spiffs_webserver.h): SPIFFS/static-file helpers and upload endpoints
-- `data/`: static web UI (`index.html`, `app.css`, `app.js`) and assets
+- `data/`: static web UI (`index.html`, `setup.html`, `app.css`, `app.js`) and assets
 
 ## Common Tasks
 
@@ -123,9 +129,14 @@ Upload firmware OTA:
 - Open the Firmware page
 - Upload the `.bin`
 
+Recover the web UI after changing frontend files:
+
+- Run `pio run -e <env> -t uploadfs`
+
 Factory reset:
 
 - Use the Config page danger area
+- This clears saved Wi-Fi, app settings, effects, and auth context, then reboots
 
 ## Troubleshooting
 
@@ -139,7 +150,8 @@ LEDs do not respond:
 Cannot reach the UI:
 
 - Join the device AP and use `http://192.168.4.1`
-- If on normal Wi-Fi, find the device IP from serial output or your router
+- If on normal Wi-Fi, find the device IP from serial output, the setup page, or your router
+- Try the `.local` hostname shown by the device, such as `http://statusglow-fc4a58.local/`
 
 Teams status does not update:
 
