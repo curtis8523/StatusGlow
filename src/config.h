@@ -3,7 +3,7 @@
 // Global firmware configuration constants
 
 // Version
-#define VERSION "1.0.0"
+#define VERSION "1.0.1"
 
 // Networking and timing
 #define DEFAULT_POLLING_PRESENCE_INTERVAL "30"   // Polling interval (seconds) as string
