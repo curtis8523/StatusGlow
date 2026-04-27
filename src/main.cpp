@@ -61,6 +61,9 @@ static const char* PREF_WIFI_SSID = "wifi_ssid";
 static const char* PREF_WIFI_PASS = "wifi_pass";
 static const char* PREF_APP_CONFIG = "app_cfg";
 static const char* PREF_AUTH_CONTEXT = "auth_ctx";
+static const char* PREF_AUTH_ACCESS_TOKEN = "auth_access";
+static const char* PREF_AUTH_REFRESH_TOKEN = "auth_refresh";
+static const char* PREF_AUTH_ID_TOKEN = "auth_id";
 static const char* PREF_OTA_LAST_LOG = "ota_last_log";
 static bool loadJsonPrefs(const char* key, JsonDocument& doc);
 static bool saveJsonPrefs(const char* key, const JsonDocument& doc);
@@ -470,6 +473,65 @@ static bool saveJsonPrefs(const char* key, const JsonDocument& doc) {
 	bool ok = prefs.putString(key, payload) > 0;
 	prefs.end();
 	return ok;
+}
+
+static bool savePrefsBlobString(const char* key, const String& value) {
+	Preferences prefs;
+	if (!prefs.begin(PREFS_NAMESPACE, false)) {
+		DBG_PRINTLN(F("savePrefsBlobString() - open failed"));
+		return false;
+	}
+	prefs.remove(key);
+	size_t written = prefs.putBytes(key, value.c_str(), value.length());
+	prefs.end();
+	return written == value.length();
+}
+
+static bool loadPrefsBlobString(const char* key, String& value) {
+	Preferences prefs;
+	if (!prefs.begin(PREFS_NAMESPACE, true)) {
+		DBG_PRINTLN(F("loadPrefsBlobString() - open failed"));
+		return false;
+	}
+	size_t len = prefs.getBytesLength(key);
+	if (len == 0) {
+		prefs.end();
+		return false;
+	}
+	char* buffer = (char*)malloc(len + 1);
+	if (!buffer) {
+		prefs.end();
+		return false;
+	}
+	size_t read = prefs.getBytes(key, buffer, len);
+	prefs.end();
+	if (read != len) {
+		free(buffer);
+		return false;
+	}
+	buffer[len] = '\0';
+	value = String(buffer);
+	free(buffer);
+	return true;
+}
+
+static bool loadPrefsStringCompat(const char* key, String& value) {
+	if (loadPrefsBlobString(key, value)) {
+		return true;
+	}
+	Preferences prefs;
+	if (!prefs.begin(PREFS_NAMESPACE, true)) {
+		DBG_PRINTLN(F("loadPrefsStringCompat() - open failed"));
+		return false;
+	}
+	String stored = prefs.getString(key, "");
+	prefs.end();
+	stored.trim();
+	if (stored.length() == 0) {
+		return false;
+	}
+	value = stored;
+	return true;
 }
 
 static void removePrefsKey(const char* key) {
@@ -892,52 +954,98 @@ static void setStatusLedColor(uint32_t color) {
 
 // Save auth context in Preferences/NVS
 void saveContext() {
-	JsonDocument contextDoc;
-	contextDoc["access_token"] = access_token.c_str();
-	contextDoc["refresh_token"] = refresh_token.c_str();
-	contextDoc["id_token"] = id_token.c_str();
-	saveJsonPrefs(PREF_AUTH_CONTEXT, contextDoc);
-	DBG_PRINT(F("saveContext() - Success: "));
-	DBG_PRINTLN(F("nvs"));
+	bool accessOk = savePrefsBlobString(PREF_AUTH_ACCESS_TOKEN, access_token);
+	bool refreshOk = savePrefsBlobString(PREF_AUTH_REFRESH_TOKEN, refresh_token);
+	bool idOk = savePrefsBlobString(PREF_AUTH_ID_TOKEN, id_token);
+	removePrefsKey(PREF_AUTH_CONTEXT); // Remove legacy combined payload once split keys are saved.
+
+	bool ok = accessOk && refreshOk && idOk;
+	DBG_PRINT(F("saveContext() - "));
+	DBG_PRINTLN(ok ? F("Success") : F("FAILED"));
+	addLogf("saveContext() - %s (a=%d r=%d i=%d)",
+		ok ? "success" : "failed",
+		accessOk ? 1 : 0,
+		refreshOk ? 1 : 0,
+		idOk ? 1 : 0);
 }
 
 boolean loadContext() {
 	boolean success = false;
-	JsonDocument contextDoc;
-	bool loadedFromPrefs = loadJsonPrefs(PREF_AUTH_CONTEXT, contextDoc);
+	String storedAccess;
+	String storedRefresh;
+	String storedId;
+	bool hasAccess = loadPrefsStringCompat(PREF_AUTH_ACCESS_TOKEN, storedAccess);
+	bool hasRefresh = loadPrefsStringCompat(PREF_AUTH_REFRESH_TOKEN, storedRefresh);
+	bool hasId = loadPrefsStringCompat(PREF_AUTH_ID_TOKEN, storedId);
 
-	if (loadedFromPrefs) {
-		int numSettings = 0;
-		if (!contextDoc["access_token"].isNull()) {
-			access_token = contextDoc["access_token"].as<String>();
-			numSettings++;
-		}
-		if (!contextDoc["refresh_token"].isNull()) {
-			refresh_token = contextDoc["refresh_token"].as<String>();
-			numSettings++;
-		}
-		if (!contextDoc["id_token"].isNull()){
-			id_token = contextDoc["id_token"].as<String>();
-			numSettings++;
-		}
-		if (numSettings == 3) {
-			success = true;
-			DBG_PRINTLN(F("loadContext() - Success"));
-			if (strlen(paramClientIdValue) > 0 && strlen(paramTenantValue) > 0) {
-				DBG_PRINTLN(F("loadContext() - Next: Refresh token."));
-				state = SMODEREFRESHTOKEN;
-			} else {
-				DBG_PRINTLN(F("loadContext() - No client id or tenant setting found."));
+	storedAccess.trim();
+	storedRefresh.trim();
+	storedId.trim();
+
+	int numSettings = 0;
+	if (hasAccess && storedAccess.length() > 0) {
+		access_token = storedAccess;
+		numSettings++;
+	}
+	if (hasRefresh && storedRefresh.length() > 0) {
+		refresh_token = storedRefresh;
+		numSettings++;
+	}
+	if (hasId && storedId.length() > 0) {
+		id_token = storedId;
+		numSettings++;
+	}
+
+	// Backwards-compatible fallback for devices that still have the legacy single JSON payload.
+	if (numSettings == 0) {
+		JsonDocument contextDoc;
+		bool loadedFromPrefs = loadJsonPrefs(PREF_AUTH_CONTEXT, contextDoc);
+		if (loadedFromPrefs) {
+			if (!contextDoc["access_token"].isNull()) {
+				access_token = contextDoc["access_token"].as<String>();
+				numSettings++;
 			}
-		} else {
-			DBG_PRINT("loadContext() - ERROR Number of valid settings in file: "); DBG_PRINT(numSettings); DBG_PRINTLN(", should be 3.");
+			if (!contextDoc["refresh_token"].isNull()) {
+				refresh_token = contextDoc["refresh_token"].as<String>();
+				numSettings++;
+			}
+			if (!contextDoc["id_token"].isNull()) {
+				id_token = contextDoc["id_token"].as<String>();
+				numSettings++;
+			}
+			if (numSettings == 3) {
+				saveContext();
+			}
 		}
+	}
+
+	if (hasRefresh && storedRefresh.length() > 0) {
+		success = true;
+		DBG_PRINTLN(F("loadContext() - Success"));
+		addLogf("loadContext() - success (%d/3)", numSettings);
+		if (strlen(paramClientIdValue) > 0 && strlen(paramTenantValue) > 0) {
+			DBG_PRINTLN(F("loadContext() - Next: Refresh token."));
+			state = SMODEREFRESHTOKEN;
+		} else {
+			DBG_PRINTLN(F("loadContext() - No client id or tenant setting found."));
+			addLog("loadContext() - missing client id or tenant");
+		}
+	} else if (numSettings > 0) {
+		DBG_PRINT("loadContext() - ERROR Number of valid settings in file: "); DBG_PRINT(numSettings); DBG_PRINTLN(", refresh token required.");
+		addLogf("loadContext() - partial context without refresh token (%d/3)", numSettings);
 	}
 
 	return success;
 }
 
 void removeContext() {
+	Preferences prefs;
+	if (prefs.begin(PREFS_NAMESPACE, false)) {
+		prefs.remove(PREF_AUTH_ACCESS_TOKEN);
+		prefs.remove(PREF_AUTH_REFRESH_TOKEN);
+		prefs.remove(PREF_AUTH_ID_TOKEN);
+		prefs.end();
+	}
 	removePrefsKey(PREF_AUTH_CONTEXT);
 	DBG_PRINTLN(F("removeContext() - Success"));
 }
@@ -1523,11 +1631,13 @@ void pollForToken() {
 		syncTime();
 	}
 	String payload;
-	payload.reserve(strlen(paramClientIdValue) + device_code.length() + 96);
+	String encodedClientId = urlEncodeFormValue(String(paramClientIdValue));
+	String encodedDeviceCode = urlEncodeFormValue(device_code);
+	payload.reserve(encodedClientId.length() + encodedDeviceCode.length() + 96);
 	payload += F("client_id=");
-	payload += paramClientIdValue;
+	payload += encodedClientId;
 	payload += F("&grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=");
-	payload += device_code;
+	payload += encodedDeviceCode;
 	DBG_PRINTLN("pollForToken()");
 	JsonDocument responseDoc;
 	boolean res = requestJsonApi(responseDoc, "https://login.microsoftonline.com/" + String(paramTenantValue) + "/oauth2/v2.0/token", payload, 0);
@@ -1603,11 +1713,13 @@ boolean refreshToken() {
 	}
 	boolean success = false;
 	String payload;
-	payload.reserve(strlen(paramClientIdValue) + refresh_token.length() + 48);
+	String encodedClientId = urlEncodeFormValue(String(paramClientIdValue));
+	String encodedRefreshToken = urlEncodeFormValue(refresh_token);
+	payload.reserve(encodedClientId.length() + encodedRefreshToken.length() + 48);
 	payload += F("client_id=");
-	payload += paramClientIdValue;
+	payload += encodedClientId;
 	payload += F("&grant_type=refresh_token&refresh_token=");
-	payload += refresh_token;
+	payload += encodedRefreshToken;
 	DBG_PRINTLN(F("refreshToken()"));
 	JsonDocument responseDoc;
 	boolean res = requestJsonApi(responseDoc, "https://login.microsoftonline.com/" + String(paramTenantValue) + "/oauth2/v2.0/token", payload, 0);

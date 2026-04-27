@@ -4,39 +4,7 @@ extern void syncTime();
 extern bool gApEnabled;
 extern String gApSsid;
 extern bool gStatusLedEnabled;
-
-#ifndef DISABLECERTCHECK
-static const char rootCACertificate[] PROGMEM =
-"-----BEGIN CERTIFICATE-----\n"
-"MIIE6DCCA9CgAwIBAgIQAnQuqhfKjiHHF7sf/P0MoDANBgkqhkiG9w0BAQsFADBh\n"
-"MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3\n"
-"d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBD\n"
-"QTAeFw0yMDA5MjMwMDAwMDBaFw0zMDA5MjIyMzU5NTlaME0xCzAJBgNVBAYTAlVT\n"
-"MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxJzAlBgNVBAMTHkRpZ2lDZXJ0IFNIQTIg\n"
-"U2VjdXJlIFNlcnZlciBDQTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEB\n"
-"ANyuWJBNwcQwFZA1W248ghX1LFy949v/cUP6ZCWA1O4Yok3wZtAKc24RmDYXZK83\n"
-"nf36QYSvx6+M/hpzTc8zl5CilodTgyu5pnVILR1WN3vaMTIa16yrBvSqXUu3R0bd\n"
-"KpPDkC55gIDvEwRqFDu1m5K+wgdlTvza/P96rtxcflUxDOg5B6TXvi/TC2rSsd9f\n"
-"/ld0Uzs1gN2ujkSYs58O09rg1/RrKatEp0tYhG2SS4HD2nOLEpdIkARFdRrdNzGX\n"
-"kujNVA075ME/OV4uuPNcfhCOhkEAjUVmR7ChZc6gqikJTvOX6+guqw9ypzAO+sf0\n"
-"/RR3w6RbKFfCs/mC/bdFWJsCAwEAAaOCAa4wggGqMB0GA1UdDgQWBBQPgGEcgjFh\n"
-"1S8o541GOLQs4cbZ4jAfBgNVHSMEGDAWgBQD3lA1VtFMu2bwo+IbG8OXsj3RVTAO\n"
-"BgNVHQ8BAf8EBAMCAYYwHQYDVR0lBBYwFAYIKwYBBQUHAwEGCCsGAQUFBwMCMBIG\n"
-"A1UdEwEB/wQIMAYBAf8CAQAwdgYIKwYBBQUHAQEEajBoMCQGCCsGAQUFBzABhhho\n"
-"dHRwOi8vb2NzcC5kaWdpY2VydC5jb20wQAYIKwYBBQUHMAKGNGh0dHA6Ly9jYWNl\n"
-"cnRzLmRpZ2ljZXJ0LmNvbS9EaWdpQ2VydEdsb2JhbFJvb3RDQS5jcnQwewYDVR0f\n"
-"BHQwcjA3oDWgM4YxaHR0cDovL2NybDMuZGlnaWNlcnQuY29tL0RpZ2lDZXJ0R2xv\n"
-"YmFsUm9vdENBLmNybDA3oDWgM4YxaHR0cDovL2NybDQuZGlnaWNlcnQuY29tL0Rp\n"
-"Z2lDZXJ0R2xvYmFsUm9vdENBLmNybDAwBgNVHSAEKTAnMAcGBWeBDAEBMAgGBmeB\n"
-"DAECATAIBgZngQwBAgIwCAYGZ4EMAQIDMA0GCSqGSIb3DQEBCwUAA4IBAQB3MR8I\n"
-"l9cSm2PSEWUIpvZlubj6kgPLoX7hyA2MPrQbkb4CCF6fWXF7Ef3gwOOPWdegUqHQ\n"
-"S1TSSJZI73fpKQbLQxCgLzwWji3+HlU87MOY7hgNI+gH9bMtxKtXc1r2G1O6+x/6\n"
-"vYzTUVEgR17vf5irF0LKhVyfIjc0RXbyQ14AniKDrN+v0ebHExfppGlkTIBn6rak\n"
-"f4994VH6npdn6mkus5CkHBXIrMtPKex6XF2firjUDLuU7tC8y7WlHgjPxEEDDb0G\n"
-"w6D0yDdVSvG/5XlCNatBmO/8EznDu1vr72N8gJzISUZwa6CCUD7QBLbKJcXBBVVf\n"
-"8nwvV9GvlW+sbXlr\n"
-"-----END CERTIFICATE-----\n";
-#endif
+extern const uint8_t x509_crt_bundle[];
 
 boolean requestJsonApi(JsonDocument& doc, String url, String payload = "", size_t capacity = 0, String type = "POST", boolean sendAuth = false) {
 	time_t now = time(nullptr);
@@ -45,56 +13,107 @@ boolean requestJsonApi(JsonDocument& doc, String url, String payload = "", size_
 		syncTime();
 	}
 	extern void addLogf(const char*, ...);
-	WiFiClientSecure tls;
+	const bool allowInsecureRetry =
+		url.startsWith("https://login.microsoftonline.com/") ||
+		url.startsWith("https://graph.microsoft.com/");
+
+	auto performRequest = [&](bool insecure, bool isRetry) -> bool {
+		WiFiClientSecure tls;
 #ifndef DISABLECERTCHECK
-	tls.setCACert(rootCACertificate);
-#else
-	tls.setInsecure();
-#endif
-
-	HTTPClient https;
-	if (https.begin(tls, url)) {
-		https.setConnectTimeout(10000);
-		https.setTimeout(10000);
-		https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
-
-		if (sendAuth) {
-			String header;
-			header.reserve(access_token.length() + 8);
-			header += F("Bearer ");
-			header += access_token;
-			https.addHeader("Authorization", header);
-			DBG_PRINT("[HTTPS] Auth token valid for "); DBG_PRINT(getTokenLifetime()); DBG_PRINTLN(" s.");
+		if (insecure) {
+			tls.setInsecure();
+		} else {
+			tls.setCACertBundle(x509_crt_bundle);
 		}
+#else
+		(void)insecure;
+		tls.setInsecure();
+#endif
+		tls.setHandshakeTimeout(20);
 
-		int httpCode = (type == "POST") ? https.POST(payload) : https.GET();
-		if (httpCode > 0) {
-			DBG_PRINT("[HTTPS] Method: "); DBG_PRINT(type.c_str()); DBG_PRINT(", Response code: "); DBG_PRINTLN(httpCode);
-			if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_BAD_REQUEST) {
-				String body = https.getString();
-				https.end();
-				DeserializationError error = deserializeJson(doc, body);
-				if (error) {
-					DBG_PRINT(F("deserializeJson() failed: "));
-					DBG_PRINTLN(error.c_str());
-					return false;
-				}
-				return true;
+		HTTPClient https;
+		if (https.begin(tls, url)) {
+			https.setConnectTimeout(10000);
+			https.setTimeout(10000);
+			https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+			https.addHeader("Accept", "application/json");
+			if (type == "POST") {
+				https.addHeader("Content-Type", "application/x-www-form-urlencoded");
 			}
-			DBG_PRINT("[HTTPS] Other HTTP code: "); DBG_PRINTLN(httpCode); DBG_PRINT("Response: ");
-			DBG_PRINTLN(https.getString());
+
+			if (sendAuth) {
+				String header;
+				header.reserve(access_token.length() + 8);
+				header += F("Bearer ");
+				header += access_token;
+				https.addHeader("Authorization", header);
+				DBG_PRINT("[HTTPS] Auth token valid for "); DBG_PRINT(getTokenLifetime()); DBG_PRINTLN(" s.");
+			}
+
+			int httpCode = (type == "POST") ? https.POST(payload) : https.GET();
+			if (httpCode > 0) {
+				DBG_PRINT("[HTTPS] Method: "); DBG_PRINT(type.c_str()); DBG_PRINT(", Response code: "); DBG_PRINTLN(httpCode);
+				String body = https.getString();
+				if (body.length() > 0) {
+					DeserializationError error = deserializeJson(doc, body);
+					if (error) {
+						DBG_PRINT(F("deserializeJson() failed: "));
+						DBG_PRINTLN(error.c_str());
+						DBG_PRINT(F("[HTTPS] Raw body: "));
+						DBG_PRINTLN(body);
+						https.end();
+						return false;
+					}
+					doc["_http_status"] = httpCode;
+					if (insecure) {
+						doc["_tls_insecure_retry"] = true;
+					}
+					https.end();
+					return true;
+				}
+
+				DBG_PRINT("[HTTPS] Empty response body for HTTP "); DBG_PRINTLN(httpCode);
+				https.end();
+				return false;
+			}
+
+			DBG_PRINT("[HTTPS] Request failed: "); DBG_PRINTLN(https.errorToString(httpCode).c_str());
+			char tlsError[128] = {0};
+			int tlsCode = tls.lastError(tlsError, sizeof(tlsError));
+			if (tlsCode != 0) {
+				DBG_PRINT("[HTTPS] TLS error: "); DBG_PRINT(tlsCode); DBG_PRINT(" ");
+				DBG_PRINTLN(tlsError);
+				addLogf("HTTPS request failed%s: %d (%s), TLS %d: %s",
+					isRetry ? " [retry]" : "",
+					httpCode,
+					https.errorToString(httpCode).c_str(),
+					tlsCode,
+					tlsError);
+			} else {
+				addLogf("HTTPS request failed%s: %d (%s)",
+					isRetry ? " [retry]" : "",
+					httpCode,
+					https.errorToString(httpCode).c_str());
+			}
 			https.end();
 			return false;
 		}
 
-		DBG_PRINT("[HTTPS] Request failed: "); DBG_PRINTLN(https.errorToString(httpCode).c_str());
-		https.end();
-		addLogf("HTTPS request failed: %d", httpCode);
+		DBG_PRINTLN(F("[HTTPS] Unable to connect"));
 		return false;
-	}
+	};
 
-	DBG_PRINTLN(F("[HTTPS] Unable to connect"));
-	return false;
+#ifndef DISABLECERTCHECK
+	bool success = performRequest(false, false);
+	if (!success && allowInsecureRetry) {
+		addLog("Retrying Microsoft HTTPS request without certificate validation");
+		doc.clear();
+		success = performRequest(true, true);
+	}
+	return success;
+#else
+	return performRequest(true, false);
+#endif
 }
 
 static inline String htmlEscape(const String& in) {
@@ -107,6 +126,32 @@ static inline String htmlEscape(const String& in) {
 		else if (c == '>') out += F("&gt;");
 		else if (c == '"') out += F("&quot;");
 		else out += c;
+	}
+	return out;
+}
+
+static inline bool isFormSafeChar(char c) {
+	return (c >= 'A' && c <= 'Z') ||
+		(c >= 'a' && c <= 'z') ||
+		(c >= '0' && c <= '9') ||
+		c == '-' || c == '_' || c == '.' || c == '~';
+}
+
+static inline String urlEncodeFormValue(const String& in) {
+	static const char hex[] = "0123456789ABCDEF";
+	String out;
+	out.reserve((in.length() * 3) + 1);
+	for (size_t i = 0; i < in.length(); ++i) {
+		unsigned char c = (unsigned char)in.charAt(i);
+		if (isFormSafeChar((char)c)) {
+			out += (char)c;
+		} else if (c == ' ') {
+			out += '+';
+		} else {
+			out += '%';
+			out += hex[(c >> 4) & 0x0F];
+			out += hex[c & 0x0F];
+		}
 	}
 	return out;
 }
@@ -194,9 +239,10 @@ void handleStartDevicelogin() {
 		}
 		JsonDocument doc;
 		String payload;
-		payload.reserve(clientId.length() + device_code.length() + 96);
+		String encodedClientId = urlEncodeFormValue(clientId);
+		payload.reserve(encodedClientId.length() + 96);
 		payload += F("client_id=");
-		payload += clientId;
+		payload += encodedClientId;
 		payload += F("&scope=offline_access%20openid%20Presence.Read");
 		boolean res = requestJsonApi(
 			doc,
@@ -236,7 +282,14 @@ void handleStartDevicelogin() {
 			}
 			sendJsonDocument(400, responseDoc);
 		} else {
-			sendApiError(502, "devicelogin_unknown_response", "Microsoft device login did not return a usable device code response.");
+			String detail = "Microsoft device login did not return a usable device code response.";
+			if (!doc["_http_status"].isNull()) {
+				detail += " HTTP ";
+				detail += doc["_http_status"].as<int>();
+				detail += ".";
+			}
+			addLogf("Device login start failed: %s", detail.c_str());
+			sendApiError(502, "devicelogin_unknown_response", detail.c_str());
 		}
 	} else {
 		JsonDocument responseDoc;
