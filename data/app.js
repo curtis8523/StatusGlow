@@ -13,6 +13,7 @@
       homeLoop: false,
       config: false,
       effects: false,
+      effectsLoop: false,
       logs: false,
       logsLoop: false,
       fw: false
@@ -20,6 +21,11 @@
     refreshers: {
       home: null,
       config: null
+    },
+    effectsEditor: {
+      selectedKey: "",
+      previewTimer: null,
+      previewNonce: 0
     },
     ui: {
       CPU_OK: 50,
@@ -273,7 +279,7 @@
 
   function routeLabel(route) {
     if (route === "config") return "Configuration";
-    if (route === "effects") return "Effects";
+    if (route === "effects") return "Effects Studio";
     if (route === "logs") return "Logs";
     if (route === "fw") return "Firmware";
     return "Home";
@@ -289,7 +295,8 @@
     document.querySelectorAll(".tab").forEach(function (tab) {
       tab.classList.toggle("active", tab.dataset.route === route);
     });
-    safeText($("page-subtitle"), " - " + routeLabel(route));
+    safeText($("page-subtitle"), routeLabel(route));
+    document.title = "StatusGlow - " + routeLabel(route);
   }
 
   function initNavigation() {
@@ -307,10 +314,18 @@
     window.addEventListener("popstate", function () {
       openRoute(routeFromPath(window.location.pathname), false).catch(console.error);
     });
+    window.addEventListener("pagehide", requestEffectsPreviewRestore);
   }
 
   async function openRoute(route, pushHistory) {
     const nextRoute = route || "home";
+    if (APP.route === "effects" && nextRoute !== "effects") {
+      try {
+        await restoreLiveStatusFromEffects();
+      } catch (err) {
+        console.error("Failed to restore live status before route change:", err);
+      }
+    }
     if (pushHistory) {
       const nextUrl = addKeyToUrl(pathFromRoute(nextRoute));
       if (nextUrl !== window.location.href) {
@@ -341,6 +356,10 @@
   async function loadCurrent() {
     APP.current = await fetchJson("/api/current", { cache: "no-store" });
     return APP.current;
+  }
+
+  async function loadLedFrame() {
+    return fetchJson("/api/led_frame", { cache: "no-store" });
   }
 
   function modeName(id) {
@@ -382,11 +401,11 @@
     $("home-ram-progress").value = Math.max(0, heapTotal - heapFree);
 
     if (current) {
-      const currentText = (current.activity ? current.activity + " - " : "") +
-        modeName(current.mode) +
-        ", Speed " + (current.speed || 0) +
-        ", Reverse " + (current.reverse ? "on" : "off") +
-        ", Color " + toHex(current.color);
+      const currentText = (current.activity || "Presence Unknown") +
+        " \u2022 " + modeName(current.mode) +
+        " \u2022 " + (current.speed || 0) + "s" +
+        (current.reverse ? " \u2022 Reverse" : "") +
+        " \u2022 " + toHex(current.color);
       safeText($("home-current-line"), currentText);
       $("home-swatch").style.backgroundColor = toHex(current.color);
     }
@@ -701,161 +720,284 @@
     return select;
   }
 
-  function effectsRow(profile) {
-    const row = document.createElement("tr");
-    row.dataset.key = profile.key;
-
-    const cells = [
-      { label: "Preview" },
-      { label: "Key" },
-      { label: "Mode" },
-      { label: "Duration (s)" },
-      { label: "Color" },
-      { label: "Fade (ms)" },
-      { label: "Brightness (%)" },
-      { label: "Actions" }
-    ].map(function (meta) {
-      const cell = document.createElement("td");
-      cell.dataset.label = meta.label;
-      row.appendChild(cell);
-      return cell;
-    });
-
-    const previewBox = document.createElement("input");
-    previewBox.type = "checkbox";
-    previewBox.className = "prev-cb";
-    previewBox.disabled = !APP.preview.enabled;
-    previewBox.addEventListener("click", function () {
-      selectPreview(row, previewBox).catch(console.error);
-    });
-    cells[0].appendChild(previewBox);
-
-    safeText(cells[1], profile.key);
-    cells[2].appendChild(buildModeSelect(profile.mode));
-
-    const speedWrap = document.createElement("div");
-    speedWrap.style.display = "flex";
-    speedWrap.style.alignItems = "center";
-    speedWrap.style.gap = ".35rem";
-    const speedRange = document.createElement("input");
-    speedRange.type = "range";
-    speedRange.min = "0";
-    speedRange.max = "60";
-    speedRange.step = "0.1";
-    speedRange.value = profile.speed || 0;
-    speedRange.dataset.k = "speed";
-    const speedInput = document.createElement("input");
-    speedInput.type = "number";
-    speedInput.min = "0";
-    speedInput.max = "60";
-    speedInput.step = "0.1";
-    speedInput.value = profile.speed || 0;
-    speedRange.addEventListener("input", function () {
-      speedInput.value = speedRange.value;
-    });
-    speedInput.addEventListener("input", function () {
-      speedRange.value = speedInput.value;
-    });
-    speedWrap.appendChild(speedRange);
-    speedWrap.appendChild(speedInput);
-    cells[3].appendChild(speedWrap);
-
-    const colorInput = document.createElement("input");
-    colorInput.type = "color";
-    colorInput.value = toHex(profile.color >>> 0);
-    colorInput.dataset.k = "color";
-    cells[4].appendChild(colorInput);
-
-    const fadeInput = document.createElement("input");
-    fadeInput.type = "number";
-    fadeInput.min = "0";
-    fadeInput.step = "50";
-    fadeInput.placeholder = "0=global";
-    fadeInput.value = profile.fade_ms || 0;
-    fadeInput.dataset.k = "fade_ms";
-    cells[5].appendChild(fadeInput);
-
-    const brightnessInput = document.createElement("input");
-    brightnessInput.type = "number";
-    brightnessInput.min = "0";
-    brightnessInput.max = "100";
-    brightnessInput.step = "1";
-    brightnessInput.placeholder = "0=global (%)";
-    brightnessInput.value = profile.bri ? Math.round((profile.bri * 100) / 255) : 0;
-    brightnessInput.dataset.k = "bri";
-    cells[6].appendChild(brightnessInput);
-
-    const previewButton = document.createElement("button");
-    previewButton.type = "button";
-    previewButton.className = "btn";
-    previewButton.textContent = "Preview";
-    previewButton.addEventListener("click", function () {
-      setMessage("fx-status", "Sending preview...");
-      previewEffectRow(row).then(function () {
-        setMessage("fx-status", "Preview applied for " + row.dataset.key + ".");
-      }).catch(function (err) {
-        setMessage("fx-status", "Preview failed: " + err.message, true);
-      });
-    });
-    cells[7].appendChild(previewButton);
-
-    if (APP.preview.enabled && APP.preview.key === profile.key) previewBox.checked = true;
-    return row;
+  function effectProfiles() {
+    return APP.effects && Array.isArray(APP.effects.profiles) ? APP.effects.profiles : [];
   }
 
-  function effectPayloadFromRow(row) {
-    const payload = { key: row.dataset.key, reverse: false };
-    row.querySelectorAll("input,select").forEach(function (input) {
-      const key = input.dataset.k;
-      if (!key) return;
-      if (key === "color") payload[key] = fromHex(input.value);
-      else if (key === "bri") {
-        const percent = Math.min(100, Math.max(0, parseFloat(input.value) || 0));
-        payload[key] = percent <= 0 ? 0 : Math.round((percent * 255) / 100);
-      } else {
-        payload[key] = parseFloat(input.value) || 0;
-      }
-    });
-    return payload;
+  function normalizeEffectProfile(profile) {
+    return {
+      key: profile.key,
+      mode: parseInt(profile.mode, 10) || 0,
+      speed: parseFloat(profile.speed) || 0,
+      color: Number(profile.color) >>> 0,
+      fade_ms: parseInt(profile.fade_ms, 10) || 0,
+      bri: parseInt(profile.bri, 10) || 0,
+      reverse: !!profile.reverse
+    };
   }
 
-  async function previewEffectRow(row) {
-    await fetchJson("/api/preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(effectPayloadFromRow(row))
+  function getEffectProfileByKey(key) {
+    const found = effectProfiles().find(function (profile) {
+      return profile.key === key;
+    });
+    return found ? normalizeEffectProfile(found) : null;
+  }
+
+  function buildEffectsPayload(profiles) {
+    const uiBrightness = Math.min(100, Math.max(0, parseInt($("fx-brightness").value, 10) || 0));
+    return {
+      fade_ms: parseInt($("fx-fade").value, 10) || 0,
+      brightness: Math.round((uiBrightness * 255) / 100),
+      gamma: parseFloat($("fx-gamma").value) || 2.2,
+      profiles: profiles.map(function (profile) {
+        return normalizeEffectProfile(profile);
+      })
+    };
+  }
+
+  function fillEffectModeSelect(value) {
+    const select = $("fx-profile-mode");
+    select.innerHTML = "";
+    APP.modes.forEach(function (mode) {
+      const option = document.createElement("option");
+      option.value = mode.id;
+      option.textContent = mode.name + " (" + mode.id + ")";
+      if (parseInt(value, 10) === parseInt(mode.id, 10)) option.selected = true;
+      select.appendChild(option);
     });
   }
 
-  async function selectPreview(row, checkbox) {
-    if (!APP.preview.enabled) {
-      checkbox.checked = false;
+  function ensureEffectSelection() {
+    const profiles = effectProfiles();
+    if (!profiles.length) {
+      APP.effectsEditor.selectedKey = "";
+      return "";
+    }
+    const currentKey = APP.effectsEditor.selectedKey;
+    if (currentKey && getEffectProfileByKey(currentKey)) return currentKey;
+    if (APP.preview && APP.preview.key && getEffectProfileByKey(APP.preview.key)) {
+      APP.effectsEditor.selectedKey = APP.preview.key;
+      return APP.effectsEditor.selectedKey;
+    }
+    APP.effectsEditor.selectedKey = profiles[0].key;
+    return APP.effectsEditor.selectedKey;
+  }
+
+  function effectProfilePayloadFromForm() {
+    const percent = Math.min(100, Math.max(0, parseFloat($("fx-profile-brightness").value) || 0));
+    return normalizeEffectProfile({
+      key: APP.effectsEditor.selectedKey,
+      mode: parseInt($("fx-profile-mode").value, 10) || 0,
+      speed: parseFloat($("fx-profile-speed").value) || 0,
+      color: fromHex($("fx-profile-color").value),
+      fade_ms: parseInt($("fx-profile-fade").value, 10) || 0,
+      bri: percent <= 0 ? 0 : Math.round((percent * 255) / 100),
+      reverse: false
+    });
+  }
+
+  function renderEffectEditorSummary(profile) {
+    if (!profile) {
+      safeText($("fx-editor-summary"), "No status profiles available.");
       return;
     }
-    document.querySelectorAll(".prev-cb").forEach(function (other) {
-      if (other !== checkbox) other.checked = false;
+    const brightnessText = profile.bri ? Math.round((profile.bri * 100) / 255) + "% brightness" : "using global brightness";
+    const fadeText = profile.fade_ms ? profile.fade_ms + " ms fade" : "using global fade";
+    safeText(
+      $("fx-editor-summary"),
+      "Editing " + profile.key + " • " + modeName(profile.mode) + " • " + (profile.speed || 0) + "s • " + fadeText + " • " + brightnessText
+    );
+  }
+
+  function fillEffectEditor(profile) {
+    const select = $("fx-profile-select");
+    if (select.value !== profile.key) select.value = profile.key;
+    fillEffectModeSelect(profile.mode);
+    $("fx-profile-speed").value = profile.speed || 0;
+    $("fx-profile-speed-range").value = profile.speed || 0;
+    $("fx-profile-color").value = toHex(profile.color >>> 0);
+    $("fx-profile-fade").value = profile.fade_ms || 0;
+    $("fx-profile-brightness").value = profile.bri ? Math.round((profile.bri * 100) / 255) : 0;
+    renderEffectEditorSummary(profile);
+  }
+
+  function renderEffectEditorSummary(profile) {
+    if (!profile) {
+      safeText($("fx-editor-summary"), "No status profiles available.");
+      return;
+    }
+    const brightnessText = profile.bri ? Math.round((profile.bri * 100) / 255) + "% brightness" : "using global brightness";
+    const fadeText = profile.fade_ms ? profile.fade_ms + " ms fade" : "using global fade";
+    safeText(
+      $("fx-editor-summary"),
+      "Editing " + profile.key + " | " + modeName(profile.mode) + " | " + (profile.speed || 0) + "s | " + fadeText + " | " + brightnessText
+    );
+  }
+
+  function populateEffectProfileSelect() {
+    const select = $("fx-profile-select");
+    const previous = select.value;
+    select.innerHTML = "";
+    effectProfiles().forEach(function (profile) {
+      const option = document.createElement("option");
+      option.value = profile.key;
+      option.textContent = profile.key;
+      if (profile.key === previous) option.selected = true;
+      select.appendChild(option);
     });
-    try {
+  }
+
+  async function ensurePreviewSelection(key) {
+    if (!APP.preview.enabled) {
+      APP.preview = await fetchJson("/api/preview_mode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: true })
+      });
+    }
+    if (APP.preview.key !== key) {
       APP.preview = await fetchJson("/api/preview_select", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: row.dataset.key })
+        body: JSON.stringify({ key: key })
       });
-      setMessage("fx-status", "Selected preview profile: " + row.dataset.key + ".");
-    } catch (err) {
-      checkbox.checked = false;
-      setMessage("fx-status", "Selecting preview failed: " + err.message, true);
-      throw err;
     }
+  }
+
+  async function restoreLiveStatusFromEffects() {
+    if (!(APP.preview && APP.preview.enabled)) return;
+    APP.preview = await fetchJson("/api/preview_mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: false })
+    });
+    APP.effectsEditor.previewNonce += 1;
+    if (APP.effectsEditor.previewTimer) {
+      window.clearTimeout(APP.effectsEditor.previewTimer);
+      APP.effectsEditor.previewTimer = null;
+    }
+    await loadCurrent();
+  }
+
+  function requestEffectsPreviewRestore() {
+    if (APP.route !== "effects" || !(APP.preview && APP.preview.enabled)) return;
+    const url = addKeyToUrl("/api/preview_mode");
+    const body = JSON.stringify({ enabled: false });
+    if (navigator.sendBeacon) {
+      try {
+        const blob = new Blob([body], { type: "application/json" });
+        if (navigator.sendBeacon(url, blob)) return;
+      } catch (err) {}
+    }
+    authFetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body,
+      keepalive: true
+    }).catch(function () {});
+  }
+
+  async function previewEditorProfileNow(message) {
+    const payload = effectProfilePayloadFromForm();
+    await ensurePreviewSelection(payload.key);
+    await fetchJson("/api/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    await loadCurrent();
+    renderEffectsCurrent();
+    renderEffectEditorSummary(payload);
+    if (message) setMessage("fx-status", message);
+  }
+
+  function scheduleEditorPreview() {
+    if (!APP.effectsEditor.selectedKey) return;
+    APP.effectsEditor.previewNonce += 1;
+    const nonce = APP.effectsEditor.previewNonce;
+    if (APP.effectsEditor.previewTimer) window.clearTimeout(APP.effectsEditor.previewTimer);
+    APP.effectsEditor.previewTimer = window.setTimeout(function () {
+      previewEditorProfileNow("Previewing " + APP.effectsEditor.selectedKey + " live...").catch(function (err) {
+        if (nonce !== APP.effectsEditor.previewNonce) return;
+        setMessage("fx-status", "Preview failed: " + err.message, true);
+      });
+    }, 140);
   }
 
   function renderEffectsCurrent() {
     if (!APP.current) return;
+    const activityName = APP.current.activity || "Manual Preview";
+    const color = toHex(APP.current.color >>> 0);
+    safeText($("fx-current"), activityName);
     safeText(
-      $("fx-current"),
-      "Current: " + (APP.current.activity || "") + " - " + modeName(APP.current.mode) +
-      ", Duration " + (APP.current.speed || 0) + "s, Color " + toHex(APP.current.color >>> 0)
+      $("fx-current-detail"),
+      modeName(APP.current.mode) + " \u2022 " + (APP.current.speed || 0) + "s" +
+      (APP.current.reverse ? " \u2022 Reverse" : "") +
+      " \u2022 " + color
     );
+    safeText($("fx-chip-mode"), modeName(APP.current.mode));
+    safeText($("fx-chip-speed"), (APP.current.speed || 0) + "s");
+    safeText($("fx-chip-color"), color);
+    safeText($("fx-chip-preview"), APP.preview && APP.preview.enabled ? (APP.preview.key || "Live") : "Off");
+    if ($("fx-chip-swatch")) $("fx-chip-swatch").style.backgroundColor = color;
+    renderLiveStrip(APP.current.color >>> 0);
+  }
+
+  function estimateLedLuma(color) {
+    const value = Number(color) >>> 0;
+    const r = (value >> 16) & 255;
+    const g = (value >> 8) & 255;
+    const b = value & 255;
+    return ((0.2126 * r) + (0.7152 * g) + (0.0722 * b)) / 255;
+  }
+
+  function renderLiveStrip(color, frame) {
+    const host = $("fx-live-strip");
+    if (!host) return;
+    const source = Array.isArray(frame) && frame.length ? frame.slice() : null;
+    const ledCount = source ? source.length : Math.max(1, Math.min(16, parseInt(APP.settings && APP.settings.num_leds, 10) || 8));
+    const hex = toHex(color >>> 0);
+    if (host.children.length !== ledCount) {
+      host.innerHTML = "";
+      for (let i = 0; i < ledCount; i++) {
+        const led = document.createElement("span");
+        led.className = "live-led";
+        host.appendChild(led);
+      }
+    }
+    for (let i = 0; i < ledCount; i++) {
+      const led = host.children[i];
+      const ledColor = source ? (source[i] >>> 0) : (color >>> 0);
+      const ledHex = source ? toHex(ledColor) : hex;
+      const luma = source ? estimateLedLuma(ledColor) : (0.45 + ((i + 1) / ledCount) * 0.45);
+      const intensity = Math.max(0.12, Math.min(1, luma));
+      const scaleY = 0.72 + (intensity * 0.42);
+      const lift = (1 - intensity) * 7;
+      const glow = 8 + Math.round(intensity * 18);
+      led.style.background = "linear-gradient(180deg, rgba(255,255,255,.34), rgba(255,255,255,0) 38%), " + ledHex;
+      led.style.opacity = String(0.28 + (intensity * 0.9));
+      led.style.transform = "translateY(" + lift.toFixed(1) + "px) scaleY(" + scaleY.toFixed(3) + ")";
+      led.style.boxShadow = "0 0 " + glow + "px " + ledHex + "66, inset 0 1px 0 rgba(255,255,255,.30)";
+      led.style.filter = "saturate(" + (1 + intensity * 0.55).toFixed(2) + ")";
+    }
+  }
+
+  async function refreshLedStripPreview() {
+    if (APP.route !== "effects") return;
+    try {
+      const frame = await loadLedFrame();
+      const colors = frame && Array.isArray(frame.frame) ? frame.frame : [];
+      if (colors.length) {
+        const firstNonZero = colors.find(function (value) { return Number(value) !== 0; });
+        renderLiveStrip((firstNonZero != null ? firstNonZero : (APP.current ? APP.current.color : 0)) >>> 0, colors);
+        safeText($("fx-live-caption"), colors.length + " LEDs mirrored from device");
+        return;
+      }
+    } catch (err) {
+      console.error(err);
+    }
+    renderLiveStrip(APP.current ? (APP.current.color >>> 0) : 0);
+    safeText($("fx-live-caption"), (APP.settings && APP.settings.num_leds ? APP.settings.num_leds : 0) + " LEDs active");
   }
 
   async function refreshEffects() {
@@ -875,14 +1017,13 @@
     $("fx-brightness-range").value = brightnessPercent;
     $("fx-gamma").value = Number(APP.effects.gamma != null ? APP.effects.gamma : 2.2).toFixed(1);
     $("fx-num-leds").value = APP.effects.num_leds || 0;
-    $("fx-preview-mode").checked = !!APP.preview.enabled;
-
-    const body = document.querySelector("#fx-table tbody");
-    body.innerHTML = "";
-    (APP.effects.profiles || []).forEach(function (profile) {
-      body.appendChild(effectsRow(profile));
-    });
+    populateEffectProfileSelect();
+    APP.effectsEditor.selectedKey = ensureEffectSelection();
+    if (APP.effectsEditor.selectedKey) {
+      fillEffectEditor(getEffectProfileByKey(APP.effectsEditor.selectedKey));
+    }
     renderEffectsCurrent();
+    await refreshLedStripPreview();
   }
 
   async function initEffects() {
@@ -895,28 +1036,91 @@
         $("fx-brightness").value = $("fx-brightness-range").value;
       });
 
-      $("fx-save-btn").addEventListener("click", async function () {
-        setMessage("fx-status", "Saving effects...");
-        try {
-          const uiBrightness = Math.min(100, Math.max(0, parseInt($("fx-brightness").value, 10) || 0));
-          const payload = {
-            fade_ms: parseInt($("fx-fade").value, 10) || 0,
-            brightness: Math.round((uiBrightness * 255) / 100),
-            gamma: parseFloat($("fx-gamma").value) || 2.2,
-            profiles: []
-          };
-          document.querySelectorAll("#fx-table tbody tr").forEach(function (row) {
-            payload.profiles.push(effectPayloadFromRow(row));
+      $("fx-profile-select").addEventListener("change", function () {
+        APP.effectsEditor.selectedKey = $("fx-profile-select").value;
+        const profile = getEffectProfileByKey(APP.effectsEditor.selectedKey);
+        if (!profile) return;
+        fillEffectEditor(profile);
+        setMessage("fx-status", "Entering edit mode for " + profile.key + "...");
+        previewEditorProfileNow("Editing " + profile.key + " with live preview.").catch(function (err) {
+          setMessage("fx-status", "Preview setup failed: " + err.message, true);
+        });
+      });
+
+      ["fx-profile-mode", "fx-profile-speed", "fx-profile-speed-range", "fx-profile-color", "fx-profile-fade", "fx-profile-brightness"].forEach(function (id) {
+        $(id).addEventListener("input", function () {
+          if (id === "fx-profile-speed") $("fx-profile-speed-range").value = $("fx-profile-speed").value;
+          if (id === "fx-profile-speed-range") $("fx-profile-speed").value = $("fx-profile-speed-range").value;
+          renderEffectEditorSummary(effectProfilePayloadFromForm());
+          scheduleEditorPreview();
+        });
+        if (id === "fx-profile-mode" || id === "fx-profile-color") {
+          $(id).addEventListener("change", function () {
+            renderEffectEditorSummary(effectProfilePayloadFromForm());
+            scheduleEditorPreview();
           });
+        }
+      });
+
+      $("fx-save-profile-btn").addEventListener("click", async function () {
+        if (!APP.effectsEditor.selectedKey) return;
+        setMessage("fx-status", "Saving " + APP.effectsEditor.selectedKey + "...");
+        try {
+          const edited = effectProfilePayloadFromForm();
+          const nextProfiles = effectProfiles().map(function (profile) {
+            return profile.key === edited.key ? edited : normalizeEffectProfile(profile);
+          });
+          const payload = buildEffectsPayload(nextProfiles);
           await fetchJson("/api/effects", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
           });
           await refreshEffects();
-          setMessage("fx-status", "Effects saved.");
+          setMessage("fx-status", "Saved " + edited.key + ".");
         } catch (err) {
-          setMessage("fx-status", "Saving effects failed: " + err.message, true);
+          setMessage("fx-status", "Saving status failed: " + err.message, true);
+        }
+      });
+
+      $("fx-revert-profile-btn").addEventListener("click", function () {
+        const profile = getEffectProfileByKey(APP.effectsEditor.selectedKey);
+        if (!profile) return;
+        fillEffectEditor(profile);
+        previewEditorProfileNow("Reverted " + profile.key + " to the saved version.").catch(function (err) {
+          setMessage("fx-status", "Revert preview failed: " + err.message, true);
+        });
+      });
+
+      $("fx-stop-preview-btn").addEventListener("click", async function () {
+        setMessage("fx-status", "Stopping preview mode...");
+        try {
+          APP.preview = await fetchJson("/api/preview_mode", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled: false })
+          });
+          await loadCurrent();
+          renderEffectsCurrent();
+          await refreshLedStripPreview();
+          setMessage("fx-status", "Preview mode stopped.");
+        } catch (err) {
+          setMessage("fx-status", "Stopping preview failed: " + err.message, true);
+        }
+      });
+
+      $("fx-save-defaults-btn").addEventListener("click", async function () {
+        setMessage("fx-status", "Saving global defaults...");
+        try {
+          await fetchJson("/api/effects", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(buildEffectsPayload(effectProfiles()))
+          });
+          await refreshEffects();
+          setMessage("fx-status", "Global defaults saved.");
+        } catch (err) {
+          setMessage("fx-status", "Saving defaults failed: " + err.message, true);
         }
       });
 
@@ -942,27 +1146,25 @@
           setMessage("fx-status", "Reload failed: " + err.message, true);
         });
       });
-
-      $("fx-preview-mode").addEventListener("change", async function () {
-        setMessage("fx-status", "Updating preview mode...");
-        try {
-          APP.preview = await fetchJson("/api/preview_mode", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ enabled: $("fx-preview-mode").checked })
-          });
-          document.querySelectorAll(".prev-cb").forEach(function (checkbox) {
-            checkbox.disabled = !APP.preview.enabled;
-            if (!APP.preview.enabled) checkbox.checked = false;
-          });
-          setMessage("fx-status", APP.preview.enabled ? "Preview mode enabled." : "Preview mode disabled.");
-        } catch (err) {
-          $("fx-preview-mode").checked = !$("fx-preview-mode").checked;
-          setMessage("fx-status", "Updating preview mode failed: " + err.message, true);
-        }
-      });
     }
     await refreshEffects();
+    if (!APP.initialized.effectsLoop) {
+      APP.initialized.effectsLoop = true;
+      setInterval(function () {
+        if (APP.route !== "effects") return;
+        Promise.all([loadCurrent(), loadLedFrame()]).then(function (result) {
+          APP.current = result[0];
+          renderEffectsCurrent();
+          const frame = result[1];
+          const colors = frame && Array.isArray(frame.frame) ? frame.frame : [];
+          if (colors.length) {
+            const firstNonZero = colors.find(function (value) { return Number(value) !== 0; });
+            renderLiveStrip((firstNonZero != null ? firstNonZero : APP.current.color) >>> 0, colors);
+            safeText($("fx-live-caption"), colors.length + " LEDs mirrored from device");
+          }
+        }).catch(console.error);
+      }, 180);
+    }
   }
 
   async function renderLogs() {

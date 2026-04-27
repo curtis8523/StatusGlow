@@ -106,6 +106,15 @@ public:
   }
   uint8_t getBrightness() const { return _bri; }
 
+  void setGamma(float gamma) {
+    if (isnan(gamma) || gamma < 0.1f) gamma = 0.1f;
+    if (gamma > 5.0f) gamma = 5.0f;
+    if (fabsf(_gamma - gamma) < 0.001f) return;
+    _gamma = gamma;
+    _needsRefresh = true;
+  }
+  float getGamma() const { return _gamma; }
+
   void setSegment(uint8_t /*segment*/, uint16_t start, uint16_t end, uint16_t mode, uint32_t color, uint16_t speed, bool reverse) {
     if (end > _count) end = _count;
     _p_segStart = start; _p_segEnd = end;
@@ -187,6 +196,7 @@ private:
   bool _p_reverse = false;
   bool _hasPending = false;
   bool _needsRefresh = true;
+  float _gamma = 2.2f;
   unsigned long _startedMs = 0;
   unsigned long _lastFrameMs = 0;
   int _pos = 0; int _dir = 1; int _phase = 0;
@@ -213,14 +223,17 @@ private:
     f *= ((float)_bri / 255.0f);
     if (f <= 0.0f) return 0;
     if (f > 1.0f) f = 1.0f;
+    float corrected = (_gamma <= 0.101f) ? f : powf(f, _gamma);
+    if (corrected < 0.0f) corrected = 0.0f;
+    if (corrected > 1.0f) corrected = 1.0f;
     uint8_t r = (c >> 16) & 0xFF;
     uint8_t g = (c >> 8) & 0xFF;
     uint8_t b = c & 0xFF;
     if (_isRGBW) {
       uint8_t w = (c >> 24) & 0xFF;
-      return Color((uint8_t)(r * f), (uint8_t)(g * f), (uint8_t)(b * f), (uint8_t)(w * f));
+      return Color((uint8_t)(r * corrected), (uint8_t)(g * corrected), (uint8_t)(b * corrected), (uint8_t)(w * corrected));
     } else {
-      return Color((uint8_t)(r * f), (uint8_t)(g * f), (uint8_t)(b * f));
+      return Color((uint8_t)(r * corrected), (uint8_t)(g * corrected), (uint8_t)(b * corrected));
     }
   }
 

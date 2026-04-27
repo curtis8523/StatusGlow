@@ -269,7 +269,7 @@ void loadAppConfig() {
 					migratedEffectsFromSpiffs = true;
 					if (!edoc["fade_ms"].isNull()) gFadeDurationMs = (uint16_t)edoc["fade_ms"].as<unsigned int>();
 					if (!edoc["brightness"].isNull()) { gDefaultBrightness = (uint8_t)edoc["brightness"].as<unsigned int>(); effects.setBrightness(gDefaultBrightness); }
-					if (!edoc["gamma"].isNull()) { gGamma = edoc["gamma"].as<float>(); if (isnan(gGamma) || gGamma < 0.1f) gGamma = 2.2f; if (gGamma > 5.0f) gGamma = 5.0f; }
+					if (!edoc["gamma"].isNull()) { gGamma = edoc["gamma"].as<float>(); if (isnan(gGamma) || gGamma < 0.1f) gGamma = 2.2f; if (gGamma > 5.0f) gGamma = 5.0f; effects.setGamma(gGamma); }
 					if (edoc["profiles"].is<JsonArray>()) {
 						JsonArray arr = edoc["profiles"].as<JsonArray>();
 						for (JsonObject o : arr) {
@@ -315,7 +315,7 @@ void loadAppConfig() {
 		if (!sys["num_leds"].isNull()) { numberLeds = (int)sys["num_leds"].as<int>(); effects.setLength(numberLeds); }
 		if (!sys["fade_ms"].isNull()) gFadeDurationMs = (uint16_t)sys["fade_ms"].as<unsigned int>();
 		if (!sys["brightness"].isNull()) { gDefaultBrightness = (uint8_t)sys["brightness"].as<unsigned int>(); effects.setBrightness(gDefaultBrightness); }
-		if (!sys["gamma"].isNull()) { gGamma = sys["gamma"].as<float>(); if (isnan(gGamma) || gGamma < 0.1f) gGamma = 2.2f; if (gGamma > 5.0f) gGamma = 5.0f; }
+		if (!sys["gamma"].isNull()) { gGamma = sys["gamma"].as<float>(); if (isnan(gGamma) || gGamma < 0.1f) gGamma = 2.2f; if (gGamma > 5.0f) gGamma = 5.0f; effects.setGamma(gGamma); }
 		if (!sys["led_type_rgbw"].isNull()) { gLedTypeRGBW = sys["led_type_rgbw"].as<bool>(); effects.setPixelType(gLedTypeRGBW); }
 		if (!sys["status_led_enabled"].isNull()) { gStatusLedEnabled = sys["status_led_enabled"].as<bool>(); }
 	}
@@ -1322,6 +1322,102 @@ static String buildOtaUploadPage(const char* actionPath, const char* inputName, 
 	return page;
 }
 
+static float clamp01f(float value) {
+	if (value < 0.0f) return 0.0f;
+	if (value > 1.0f) return 1.0f;
+	return value;
+}
+
+static float smoothstep01f(float value) {
+	value = clamp01f(value);
+	return value * value * (3.0f - (2.0f * value));
+}
+
+static uint32_t blendColor(uint32_t a, uint32_t b, float t) {
+	t = clamp01f(t);
+	uint8_t ar = (a >> 16) & 0xFF;
+	uint8_t ag = (a >> 8) & 0xFF;
+	uint8_t ab = a & 0xFF;
+	uint8_t br = (b >> 16) & 0xFF;
+	uint8_t bg = (b >> 8) & 0xFF;
+	uint8_t bb = b & 0xFF;
+	uint8_t rr = (uint8_t)(ar + ((br - ar) * t));
+	uint8_t rg = (uint8_t)(ag + ((bg - ag) * t));
+	uint8_t rb = (uint8_t)(ab + ((bb - ab) * t));
+	return effects.Color(rr, rg, rb);
+}
+
+static uint32_t scaleStartupColor(uint32_t color, float intensity) {
+	intensity = clamp01f(intensity);
+	float corrected = powf(intensity, gGamma > 0.1f ? gGamma : 2.2f);
+	uint8_t r = (uint8_t)(((color >> 16) & 0xFF) * corrected);
+	uint8_t g = (uint8_t)(((color >> 8) & 0xFF) * corrected);
+	uint8_t b = (uint8_t)((color & 0xFF) * corrected);
+	return effects.Color(r, g, b);
+}
+
+static void showStartupFrame(uint32_t sweepColor, float headPos, float sweepPhase, float bloomPhase) {
+	const float center = (numberLeds > 0) ? (numberLeds - 1) * 0.5f : 0.0f;
+	const float sweepTail = 2.8f;
+	const uint32_t bloomColor = blendColor(sweepColor, effects.Color(255, 255, 255), 0.35f + (0.45f * bloomPhase));
+
+	effects.strip.clear();
+	for (int i = 0; i < numberLeds; ++i) {
+		float distToHead = fabsf((float)i - headPos);
+		float sweep = 0.0f;
+		if (sweepPhase > 0.0f && distToHead <= sweepTail) {
+			float normalized = 1.0f - (distToHead / sweepTail);
+			sweep = powf(clamp01f(normalized), 1.35f) * (0.30f + (0.70f * sweepPhase));
+		}
+
+		float bloom = 0.0f;
+		if (bloomPhase > 0.0f) {
+			float bloomRadius = 0.9f + (bloomPhase * (center + 1.6f));
+			float normalized = 1.0f - (fabsf((float)i - center) / bloomRadius);
+			bloom = powf(clamp01f(normalized), 1.7f) * (1.0f - (0.42f * bloomPhase));
+		}
+
+		float sparkle = 0.0f;
+		if (bloomPhase > 0.0f && (i == 0 || i == numberLeds - 1 || i == (int)center || i == (int)(center + 0.5f))) {
+			sparkle = 0.10f * (1.0f - bloomPhase);
+		}
+
+		float intensity = clamp01f(sweep + bloom + sparkle);
+		if (intensity <= 0.001f) continue;
+
+		float mixAmount = (bloom > sweep) ? bloomPhase : (0.18f + (0.32f * sweepPhase));
+		uint32_t frameColor = blendColor(sweepColor, bloomColor, mixAmount);
+		effects.strip.setPixelColor(i, scaleStartupColor(frameColor, intensity));
+	}
+	effects.strip.show();
+}
+
+static void playStartupSequence() {
+	if (numberLeds <= 0) return;
+	const uint32_t accentA = effects.Color(0, 255, 170);
+	const uint32_t accentB = effects.Color(48, 118, 255);
+	const unsigned long totalMs = 980;
+	const unsigned long startMs = millis();
+
+	EFFECTS_LOCK();
+	while ((millis() - startMs) < totalMs) {
+		float t = (float)(millis() - startMs) / (float)totalMs;
+		if (t < 0.64f) {
+			float phase = smoothstep01f(t / 0.64f);
+			float headPos = phase * (float)(numberLeds - 1);
+			uint32_t color = blendColor(accentA, accentB, phase);
+			showStartupFrame(color, headPos, 1.0f, 0.0f);
+		} else {
+			float phase = smoothstep01f((t - 0.64f) / 0.36f);
+			showStartupFrame(accentB, (float)(numberLeds - 1), 0.35f * (1.0f - phase), phase);
+		}
+		delay(16);
+	}
+	effects.strip.clear();
+	effects.strip.show();
+	EFFECTS_UNLOCK();
+}
+
 // Neopixel control
 void setAnimation(uint8_t segment, uint8_t mode = FX_MODE_STATIC, uint32_t color = RED, uint16_t speed = 3000, bool reverse = false) {
 	uint16_t startLed = 0, endLed = 0;
@@ -1730,6 +1826,7 @@ void setup()
 	effects.init();
 	// CPU usage now measured via FreeRTOS task statistics (no idle hooks needed)
 	effects.setBrightness(gDefaultBrightness);
+	effects.setGamma(gGamma);
 	effects.start();
 	// Initialize LED count early so setAnimation uses a valid range; loadAppConfig() may override later
 	numberLeds = NUMLEDS;
@@ -1737,6 +1834,7 @@ void setup()
 	effects.setLength(numberLeds);
 	EFFECTS_UNLOCK();
 	setAnimation(0, FX_MODE_STATIC, BLACK);
+	playStartupSequence();
 	
 	initDeviceIdentity();
 
@@ -2226,6 +2324,9 @@ void setup()
 				gGamma = doc["gamma"].as<float>();
 				if (isnan(gGamma) || gGamma < 0.1f) gGamma = 2.2f;
 				if (gGamma > 5.0f) gGamma = 5.0f;
+				EFFECTS_LOCK();
+				effects.setGamma(gGamma);
+				EFFECTS_UNLOCK();
 			}
 			if (!doc["profiles"].isNull() && doc["profiles"].is<JsonArray>()) {
 				JsonArray arr = doc["profiles"].as<JsonArray>();
@@ -2349,6 +2450,19 @@ void setup()
 			d["speed"] = ((float)gTarget.speed) / 1000.0f;
 			d["reverse"] = gTarget.reverse;
 			d["brightness"] = effects.getBrightness();
+			sendJsonDocument(200, d);
+		});
+		server.on("/api/led_frame", HTTP_GET, [] {
+			if (!requireAdminAuth()) return;
+			JsonDocument d;
+			d["ok"] = true;
+			d["num_leds"] = numberLeds;
+			JsonArray frame = d["frame"].to<JsonArray>();
+			EFFECTS_LOCK();
+			for (int i = 0; i < numberLeds; ++i) {
+				frame.add((uint32_t)effects.strip.getPixelColor(i));
+			}
+			EFFECTS_UNLOCK();
 			sendJsonDocument(200, d);
 		});
 	server.on("/fs/delete", HTTP_DELETE, []() {

@@ -11,6 +11,7 @@ It is set up for:
 
 - Polls Microsoft Teams presence with device login
 - Displays status with configurable LED effects and colors
+- Plays a short startup light sequence before handing off to live status
 - Lets you change RGB/RGBW mode at runtime
 - Hosts a local web UI for config, effects, logs, firmware upload, and filesystem OTA upload
 - Falls back to a local AP when Wi-Fi is not configured
@@ -101,7 +102,7 @@ Then click `Start device login`, open the Microsoft device login page, and compl
 
 - `Home`: current status, uptime, memory, Wi-Fi, and version
 - `Config`: Wi-Fi, Teams login settings, LED type, status LED, reboot, factory reset
-- `Effects`: per-status effect settings, brightness, gamma, fade, LED count, preview mode
+- `Effects`: single-status editor with live preview, mirrored strip preview, brightness, gamma, fade, and LED count
 - `Logs`: recent device logs
 - `Firmware`: OTA upload and last OTA log
 
@@ -142,6 +143,12 @@ Factory reset:
 
 - Use the Config page danger area
 - This clears saved Wi-Fi, app settings, effects, and auth context, then reboots
+
+Preview a status effect:
+
+- Open the Effects page and choose a status to edit
+- Changes preview live on the strip and in the mirrored strip preview
+- Leaving the Effects page automatically returns the LEDs to normal live Teams status
 
 ## Troubleshooting
 

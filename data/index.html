@@ -13,11 +13,15 @@
       <div class="brand-row">
         <div class="brand-left">
           <img class="brand-img" src="/logo.svg" alt="StatusGlow">
-          <span class="brand-logo" aria-hidden="true"></span>
-          <span class="brand-title">StatusGlow</span>
-          <span class="brand-sub" id="page-subtitle"></span>
+          <div class="brand-copy">
+            <div class="brand-headline">
+              <span class="brand-title">StatusGlow</span>
+            </div>
+            <div class="brand-kicker">Presence Light Controller</div>
+          </div>
         </div>
         <div class="brand-right">
+          <span class="brand-sub" id="page-subtitle">Home</span>
           <span class="brand-ver" id="brand-version">v-</span>
         </div>
       </div>
@@ -30,80 +34,134 @@
       </nav>
     </header>
 
-    <div class="topbar">
-      <strong>CPU</strong>
-      <span id="live_cpu" class="pill"></span>
-      <strong class="ml-s">Heap</strong>
-      <span id="live_heap" class="pill"></span>
-      <strong class="ml-s">Wi-Fi</strong>
-      <span id="live_wifi" class="bars" aria-label="Wi-Fi signal"></span>
-      <button id="theme_toggle" class="btn ml-s" type="button" title="Toggle theme">Theme</button>
-    </div>
+    <section class="topbar">
+      <div class="topbar-stat">
+        <span class="topbar-label">CPU</span>
+        <span id="live_cpu" class="pill"></span>
+      </div>
+      <div class="topbar-stat">
+        <span class="topbar-label">Heap</span>
+        <span id="live_heap" class="pill"></span>
+      </div>
+      <div class="topbar-stat topbar-wifi">
+        <span class="topbar-label">Wi-Fi</span>
+        <span id="live_wifi" class="bars" aria-label="Wi-Fi signal"></span>
+      </div>
+      <button id="theme_toggle" class="btn topbar-theme" type="button" title="Toggle theme">Theme</button>
+    </section>
 
     <main>
       <section id="page-home" class="page">
-        <div class="card">
-          <div class="status-grid">
-            <section>
-              <h3>LED status</h3>
-              <div id="home-current-line" class="lead"></div>
-              <div class="mt-s stat">
-                <span>Color</span>
+        <div class="page-intro">
+          <h1>Device Overview</h1>
+          <p>Live status, connectivity, and memory health for the current controller.</p>
+        </div>
+
+        <div class="page-grid page-grid-home">
+          <section class="card hero-card">
+            <div class="section-heading">
+              <h2>Current Presence Output</h2>
+              <span class="section-badge">Live</span>
+            </div>
+            <div id="home-current-line" class="hero-line"></div>
+            <div class="hero-meta">
+              <div class="stat-chip">
+                <span class="stat-chip-label">Color</span>
                 <span id="home-swatch" class="swatch"></span>
               </div>
-            </section>
-            <section>
-              <h3>System info</h3>
-              <div class="kv"><strong>Polling interval</strong><span><span id="home-poll-interval"></span> s</span></div>
-              <div class="kv"><strong>LEDs</strong><span id="home-num-leds"></span></div>
-              <div class="kv"><strong>Uptime</strong><span id="home-uptime"></span></div>
-              <div class="kv">
-                <strong>Wi-Fi</strong>
-                <span>
-                  <span id="home-wifi-bars" class="bars" aria-label="Wi-Fi signal"></span>
-                  <span class="ml-s meta">RSSI <span id="home-rssi"></span> dBm</span>
-                  <span class="ml-s meta">SSID <span id="home-ssid"></span></span>
-                  <span class="ml-s meta">IP <span id="home-ip"></span></span>
-                </span>
+              <div class="stat-chip">
+                <span class="stat-chip-label">Polling</span>
+                <span><span id="home-poll-interval"></span> s</span>
               </div>
-              <div class="kv"><strong>Network</strong><span id="home-network"></span></div>
-              <div class="kv"><strong>Heap</strong><span><span id="home-heap"></span> bytes free, min <span id="home-min-heap"></span></span></div>
-              <div class="kv"><strong>CPU / Version</strong><span><span id="home-cpu-freq"></span> / <span id="home-version"></span></span></div>
-            </section>
-          </div>
+              <div class="stat-chip">
+                <span class="stat-chip-label">LEDs</span>
+                <span id="home-num-leds"></span>
+              </div>
+              <div class="stat-chip">
+                <span class="stat-chip-label">Uptime</span>
+                <span id="home-uptime"></span>
+              </div>
+            </div>
+          </section>
 
-          <section class="mt">
-            <h3>Memory usage</h3>
-            <div class="row" id="home-sketch-text"></div>
-            <progress id="home-sketch-progress" max="1" value="0"></progress>
-            <div class="row mt-s" id="home-ram-text"></div>
-            <progress id="home-ram-progress" max="1" value="0"></progress>
+          <section class="card">
+            <div class="section-heading">
+              <h2>System Snapshot</h2>
+            </div>
+            <div class="kv"><strong>Wi-Fi</strong><span><span id="home-wifi-bars" class="bars" aria-label="Wi-Fi signal"></span><span class="ml-s meta">RSSI <span id="home-rssi"></span> dBm</span></span></div>
+            <div class="kv"><strong>SSID</strong><span id="home-ssid"></span></div>
+            <div class="kv"><strong>IP Address</strong><span id="home-ip"></span></div>
+            <div class="kv"><strong>Network State</strong><span id="home-network"></span></div>
+            <div class="kv"><strong>CPU / Version</strong><span><span id="home-cpu-freq"></span> / <span id="home-version"></span></span></div>
+            <div class="kv"><strong>Heap</strong><span><span id="home-heap"></span> bytes free, min <span id="home-min-heap"></span></span></div>
+          </section>
+
+          <section class="card card-span-2">
+            <div class="section-heading">
+              <h2>Memory Usage</h2>
+            </div>
+            <div class="metric-stack">
+              <div>
+                <div class="row" id="home-sketch-text"></div>
+                <progress id="home-sketch-progress" max="1" value="0"></progress>
+              </div>
+              <div>
+                <div class="row mt-s" id="home-ram-text"></div>
+                <progress id="home-ram-progress" max="1" value="0"></progress>
+              </div>
+            </div>
           </section>
         </div>
       </section>
 
       <section id="page-config" class="page hidden">
-        <div class="card">
-          <form id="cfg-form">
-            <label>Client ID<input id="cfg-client-id"></label>
-            <label>Tenant<input id="cfg-tenant"></label>
-            <label>Presence polling (sec)<input id="cfg-poll" type="number" min="1" step="1"></label>
-            <label>
-              LED Type
-              <select id="cfg-led-type">
-                <option value="false">RGB (3-color)</option>
-                <option value="true">RGBW (4-color)</option>
-              </select>
-            </label>
-            <label class="checkbox-row">
-              <input type="checkbox" id="cfg-status-led">
-              <span>Enable Status LED (S3 only, GPIO21)</span>
-            </label>
+        <div class="page-intro">
+          <h1>Configuration</h1>
+          <p>Manage Microsoft connection settings, device behavior, and network access.</p>
+        </div>
 
-            <fieldset class="mt">
-              <legend>Wi-Fi</legend>
-              <div id="cfg-wifi-state" class="muted-line"></div>
-              <label>
+        <div class="page-grid">
+          <section class="card">
+            <div class="section-heading">
+              <h2>Microsoft Teams</h2>
+            </div>
+            <form id="cfg-form">
+              <div class="form-grid compact-grid config-grid">
+                <label class="field-stack">Client ID<input id="cfg-client-id"></label>
+                <label class="field-stack">Tenant<input id="cfg-tenant"></label>
+                <label class="field-stack">Presence polling (sec)<input id="cfg-poll" type="number" min="1" step="1"></label>
+                <label class="field-stack">
+                  LED Type
+                  <select id="cfg-led-type">
+                    <option value="false">RGB (3-color)</option>
+                    <option value="true">RGBW (4-color)</option>
+                  </select>
+                </label>
+              </div>
+
+              <label class="checkbox-row mt-s">
+                <input type="checkbox" id="cfg-status-led">
+                <span>Enable onboard status LED (GPIO21 on supported S3 boards)</span>
+              </label>
+
+              <div class="button-row mt">
+                <button type="submit" class="btn">Save Settings</button>
+                <button type="button" class="btn" id="cfg-reload-btn">Reload</button>
+                <button type="button" class="btn" id="cfg-device-login-btn">Start Device Login</button>
+                <button type="button" class="btn btn-danger" id="cfg-reboot-btn">Reboot Device</button>
+              </div>
+              <div id="cfg-status" class="muted-line mt-s"></div>
+            </form>
+          </section>
+
+          <section class="card">
+            <div class="section-heading">
+              <h2>Wi-Fi & Access Point</h2>
+              <span class="section-badge">Network</span>
+            </div>
+            <div id="cfg-wifi-state" class="status-banner"></div>
+            <div class="form-grid compact-grid config-grid mt">
+              <label class="field-stack field-span-2">
                 SSID
                 <span>
                   <span class="wifi-ssid-input">
@@ -114,27 +172,23 @@
                   <span id="cfg-wifi-scan-status" class="wifi-scan-status"></span>
                 </span>
               </label>
-              <label>Password<input id="cfg-wifi-password" type="password"></label>
-              <div class="button-row mt">
-                <button type="button" class="btn" id="cfg-connect-btn">Connect Wi-Fi</button>
-                <button type="button" class="btn" id="cfg-ap-start-btn">Start AP</button>
-                <button type="button" class="btn" id="cfg-ap-stop-btn">Stop AP</button>
-              </div>
-            </fieldset>
+              <label class="field-stack">Password<input id="cfg-wifi-password" type="password"></label>
+            </div>
 
             <div class="button-row mt">
-              <button type="submit" class="btn">Save</button>
-              <button type="button" class="btn" id="cfg-reload-btn">Reload</button>
-              <button type="button" class="btn" id="cfg-device-login-btn">Start device login</button>
-              <button type="button" class="btn btn-danger" id="cfg-reboot-btn">Reboot Device</button>
+              <button type="button" class="btn" id="cfg-connect-btn">Connect Wi-Fi</button>
+              <button type="button" class="btn" id="cfg-ap-start-btn">Start AP</button>
+              <button type="button" class="btn" id="cfg-ap-stop-btn">Stop AP</button>
             </div>
-            <div id="cfg-status" class="muted-line mt-s"></div>
-          </form>
+          </section>
 
-          <section class="mt">
-            <h3>Danger area</h3>
+          <section class="card card-danger card-span-2">
+            <div class="section-heading">
+              <h2>Danger Area</h2>
+            </div>
+            <p class="danger-copy">Factory reset clears saved Wi-Fi, app settings, effects, and auth context, then reboots the device.</p>
             <div class="button-row">
-              <button type="button" class="btn" id="cfg-factory-reset-btn">Factory reset (clear and reboot)</button>
+              <button type="button" class="btn btn-danger" id="cfg-factory-reset-btn">Factory Reset</button>
             </div>
           </section>
         </div>
@@ -144,7 +198,7 @@
           <p id="cfg-reset-copy"></p>
           <div class="dialog-menu">
             <button class="btn" id="cfg-reset-cancel-btn">Cancel</button>
-            <button class="btn" id="cfg-reset-confirm-btn">Clear settings and reboot</button>
+            <button class="btn btn-danger" id="cfg-reset-confirm-btn">Clear settings and reboot</button>
           </div>
         </dialog>
 
@@ -164,81 +218,192 @@
       </section>
 
       <section id="page-effects" class="page hidden">
-        <div class="card">
-          <div class="controls">
-            <label>Global Fade (ms): <input id="fx-fade" type="number" min="0" step="50"></label>
-            <label>Brightness (%): <input id="fx-brightness" type="number" min="0" max="100" step="1"></label>
-            <input id="fx-brightness-range" type="range" min="0" max="100" step="1">
-            <label>Gamma: <input id="fx-gamma" type="number" min="0.1" max="5" step="0.1"></label>
-            <label>LEDs: <input id="fx-num-leds" type="number" min="1" max="1024" step="1"></label>
-            <label><input id="fx-preview-mode" type="checkbox"> Preview Mode</label>
-            <button class="btn" id="fx-save-btn">Save</button>
-            <button class="btn" id="fx-apply-leds-btn">Apply LED Count</button>
-            <button class="btn" id="fx-reload-btn">Reload</button>
+        <div class="page-intro">
+          <h1>Effects Studio</h1>
+          <p>Shape the behavior of each Teams presence state with consistent timing, color, and brightness controls.</p>
+        </div>
+
+        <div class="page-grid page-grid-effects">
+          <section class="card hero-card">
+            <div class="section-heading">
+              <h2>Active Output</h2>
+              <span class="section-badge">Live</span>
+            </div>
+            <div id="fx-current" class="hero-line"></div>
+            <div id="fx-current-detail" class="muted-line mt-s"></div>
+          <div class="hero-meta hero-meta-compact">
+            <div class="stat-chip stat-chip-tight">
+              <span class="stat-chip-label">Mode</span>
+              <span id="fx-chip-mode"></span>
+            </div>
+              <div class="stat-chip stat-chip-tight">
+                <span class="stat-chip-label">Duration</span>
+                <span id="fx-chip-speed"></span>
+              </div>
+              <div class="stat-chip stat-chip-tight">
+                <span class="stat-chip-label">Color</span>
+                <span class="chip-inline">
+                  <span id="fx-chip-swatch" class="swatch swatch-sm"></span>
+                  <span id="fx-chip-color"></span>
+                </span>
+              </div>
+              <div class="stat-chip stat-chip-tight">
+                <span class="stat-chip-label">Preview</span>
+              <span id="fx-chip-preview"></span>
+            </div>
           </div>
-          <div id="fx-status" class="muted-line"></div>
-          <div id="fx-current" class="row current-text"></div>
-          <div class="table-wrap">
-            <table id="fx-table">
-              <thead>
-                <tr>
-                  <th style="width:72px">Preview</th>
-                  <th style="min-width:140px">Key</th>
-                  <th style="min-width:150px">Mode</th>
-                  <th style="width:170px">Duration (s)</th>
-                  <th style="width:110px">Color</th>
-                  <th style="width:120px">Fade (ms)</th>
-                  <th style="width:120px">Brightness (%)</th>
-                  <th style="width:110px">Actions</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
+          <div class="live-strip-panel mt">
+            <div class="live-strip-head">
+              <span class="stat-chip-label">Live Strip Preview</span>
+              <span id="fx-live-caption" class="muted-line"></span>
+            </div>
+            <div id="fx-live-strip" class="live-strip" aria-label="Current LED preview"></div>
           </div>
+        </section>
+
+        <section class="card">
+          <div class="section-heading">
+            <h2>Status Editor</h2>
+            <span class="section-badge">Focused</span>
+          </div>
+          <p class="muted-line editor-intro">Choose one presence state to edit. It previews live while you tweak it, and only becomes permanent when you save.</p>
+
+            <div class="editor-shell mt-s">
+              <label class="editor-select-row">
+                <span>Status</span>
+                <select id="fx-profile-select"></select>
+              </label>
+
+              <div id="fx-editor-summary" class="editor-summary mt-s"></div>
+
+              <div class="editor-grid mt">
+                <label>Pattern<select id="fx-profile-mode"></select></label>
+                <label>Fade Override (ms)<input id="fx-profile-fade" type="number" min="0" step="50" placeholder="0 = global"></label>
+                <label class="range-field editor-span">
+                  <span>Duration (s)</span>
+                  <span class="range-combo">
+                    <input id="fx-profile-speed-range" type="range" min="0" max="60" step="0.1">
+                    <input id="fx-profile-speed" type="number" min="0" max="60" step="0.1">
+                  </span>
+                </label>
+                <label>Color<input id="fx-profile-color" type="color"></label>
+                <label>Brightness Override (%)<input id="fx-profile-brightness" type="number" min="0" max="100" step="1" placeholder="0 = global"></label>
+              </div>
+
+              <div class="button-row mt">
+                <button class="btn" id="fx-save-profile-btn">Save This Status</button>
+                <button class="btn" id="fx-revert-profile-btn">Revert</button>
+                <button class="btn" id="fx-stop-preview-btn">Stop Preview</button>
+              </div>
+            </div>
+            <div id="fx-status" class="muted-line mt-s"></div>
+          </section>
+
+          <section class="card card-span-2">
+            <div class="section-heading">
+              <h2>System Defaults</h2>
+              <span class="section-badge">Shared</span>
+            </div>
+            <div class="settings-grid">
+              <section class="subpanel">
+                <h3>Global Behavior</h3>
+                <div class="form-grid compact-grid">
+                  <label>Global Fade (ms)<input id="fx-fade" type="number" min="0" step="50"></label>
+                  <label>Gamma<input id="fx-gamma" type="number" min="0.1" max="5" step="0.1"></label>
+                  <label class="range-field range-field-wide">
+                    <span>Default Brightness (%)</span>
+                    <span class="range-combo">
+                      <input id="fx-brightness-range" type="range" min="0" max="100" step="1">
+                      <input id="fx-brightness" type="number" min="0" max="100" step="1">
+                    </span>
+                  </label>
+                </div>
+                <div class="button-row mt">
+                  <button class="btn" id="fx-save-defaults-btn">Save Defaults</button>
+                </div>
+              </section>
+
+              <section class="subpanel">
+                <h3>Hardware</h3>
+                <div class="form-grid compact-grid">
+                  <label>LED Count<input id="fx-num-leds" type="number" min="1" max="1024" step="1"></label>
+                </div>
+                <div class="button-row mt">
+                  <button class="btn" id="fx-apply-leds-btn">Apply LED Count</button>
+                  <button class="btn" id="fx-reload-btn">Reload</button>
+                </div>
+              </section>
+            </div>
+          </section>
         </div>
       </section>
 
       <section id="page-logs" class="page hidden">
-        <div class="card">
-          <div class="controls">
-            <label>Show last <input id="logs-count" type="number" min="1" max="120" value="50"></label>
-            <label><input id="logs-auto" type="checkbox" checked> Auto-refresh</label>
-            <button class="btn" id="logs-reload-btn">Reload</button>
-            <span id="logs-meta" class="meta"></span>
-          </div>
-          <pre id="logs-box" class="logbox">(loading...)</pre>
+        <div class="page-intro">
+          <h1>Logs</h1>
+          <p>Inspect recent device events and background activity.</p>
+        </div>
+
+        <div class="page-grid">
+          <section class="card card-span-2">
+            <div class="section-heading">
+              <h2>Log Stream</h2>
+              <span id="logs-meta" class="meta"></span>
+            </div>
+            <div class="controls controls-inline">
+              <label>Show last <input id="logs-count" type="number" min="1" max="120" value="50"></label>
+              <label class="checkbox-row checkbox-panel"><input id="logs-auto" type="checkbox" checked><span>Auto-refresh</span></label>
+              <button class="btn" id="logs-reload-btn">Reload</button>
+            </div>
+            <pre id="logs-box" class="logbox mt-s">(loading...)</pre>
+          </section>
         </div>
       </section>
 
       <section id="page-fw" class="page hidden">
-        <div class="card">
-          <section>
-            <h3>Current version</h3>
-            <div class="kv"><strong>Version:</strong> <span id="fw-version"></span></div>
-            <div class="kv"><strong>Sketch:</strong> <span id="fw-sketch"></span></div>
-            <div class="kv"><strong>Flash:</strong> <span id="fw-flash"></span></div>
-            <div class="kv"><strong>SDK:</strong> <span id="fw-sdk"></span></div>
+        <div class="page-intro">
+          <h1>Firmware</h1>
+          <p>Review the current build and install firmware or filesystem updates over the air.</p>
+        </div>
+
+        <div class="page-grid">
+          <section class="card">
+            <div class="section-heading">
+              <h2>Current Build</h2>
+            </div>
+            <div class="kv"><strong>Version</strong><span id="fw-version"></span></div>
+            <div class="kv"><strong>Sketch</strong><span id="fw-sketch"></span></div>
+            <div class="kv"><strong>Flash</strong><span id="fw-flash"></span></div>
+            <div class="kv"><strong>SDK</strong><span id="fw-sdk"></span></div>
           </section>
 
-          <section class="mt">
-            <h3>Upload new firmware</h3>
-            <form id="fw-form" method="POST" action="/update" enctype="multipart/form-data">
+          <section class="card">
+            <div class="section-heading">
+              <h2>Firmware OTA</h2>
+            </div>
+            <form id="fw-form" method="POST" action="/update" enctype="multipart/form-data" class="upload-stack">
               <input type="file" name="firmware" accept=".bin,.bin.gz" required>
-              <button class="btn" type="submit">Upload and Install</button>
-              <button class="btn" type="button" id="fw-view-ota-btn">View last OTA log</button>
+              <div class="button-row">
+                <button class="btn" type="submit">Upload and Install</button>
+                <button class="btn" type="button" id="fw-view-ota-btn">View Last OTA Log</button>
+              </div>
             </form>
-            <div class="hint mt-s">Device will reboot automatically after a successful update.</div>
-            <div id="fw-status" class="mt-s muted-line"></div>
+            <div class="hint mt-s">The device reboots automatically after a successful firmware update.</div>
+            <div id="fw-status" class="muted-line mt-s"></div>
           </section>
 
-          <section class="mt">
-            <h3>Upload filesystem image</h3>
-            <form id="fw-fs-form" method="POST" action="/updatefs" enctype="multipart/form-data">
+          <section class="card card-span-2">
+            <div class="section-heading">
+              <h2>Filesystem OTA</h2>
+            </div>
+            <form id="fw-fs-form" method="POST" action="/updatefs" enctype="multipart/form-data" class="upload-stack">
               <input type="file" name="filesystem" accept=".bin,.bin.gz" required>
-              <button class="btn" type="submit">Upload Filesystem</button>
+              <div class="button-row">
+                <button class="btn" type="submit">Upload Filesystem</button>
+              </div>
             </form>
-            <div class="hint mt-s">Use this after frontend changes to update the SPIFFS web UI assets.</div>
-            <div id="fw-fs-status" class="mt-s muted-line"></div>
+            <div class="hint mt-s">Use this after frontend changes to update the SPIFFS-hosted web UI assets.</div>
+            <div id="fw-fs-status" class="muted-line mt-s"></div>
           </section>
         </div>
 
