@@ -224,82 +224,45 @@
         </div>
 
         <div class="page-grid page-grid-effects">
-          <section class="card hero-card">
-            <div class="section-heading">
-              <h2>Active Output</h2>
-              <span class="section-badge">Live</span>
-            </div>
-            <div id="fx-current" class="hero-line"></div>
-            <div id="fx-current-detail" class="muted-line mt-s"></div>
-          <div class="hero-meta hero-meta-compact">
-            <div class="stat-chip stat-chip-tight">
-              <span class="stat-chip-label">Mode</span>
-              <span id="fx-chip-mode"></span>
-            </div>
-              <div class="stat-chip stat-chip-tight">
-                <span class="stat-chip-label">Duration</span>
-                <span id="fx-chip-speed"></span>
+          <div class="column-stack">
+            <section class="card hero-card">
+              <div class="section-heading">
+                <h2>Active Output</h2>
+                <span class="section-badge">Live</span>
               </div>
+              <div id="fx-current" class="hero-line"></div>
+              <div id="fx-current-detail" class="muted-line mt-s"></div>
+            <div class="hero-meta hero-meta-compact">
               <div class="stat-chip stat-chip-tight">
-                <span class="stat-chip-label">Color</span>
-                <span class="chip-inline">
-                  <span id="fx-chip-swatch" class="swatch swatch-sm"></span>
-                  <span id="fx-chip-color"></span>
-                </span>
+                <span class="stat-chip-label">Mode</span>
+                <span id="fx-chip-mode"></span>
               </div>
-              <div class="stat-chip stat-chip-tight">
-                <span class="stat-chip-label">Preview</span>
-              <span id="fx-chip-preview"></span>
-            </div>
-          </div>
-          <div class="live-strip-panel mt">
-            <div class="live-strip-head">
-              <span class="stat-chip-label">Live Strip Preview</span>
-              <span id="fx-live-caption" class="muted-line"></span>
-            </div>
-            <div id="fx-live-strip" class="live-strip" aria-label="Current LED preview"></div>
-          </div>
-        </section>
-
-        <section class="card">
-          <div class="section-heading">
-            <h2>Status Editor</h2>
-            <span class="section-badge">Focused</span>
-          </div>
-          <p class="muted-line editor-intro">Choose one presence state to edit. It previews live while you tweak it, and only becomes permanent when you save.</p>
-
-            <div class="editor-shell mt-s">
-              <label class="editor-select-row">
-                <span>Status</span>
-                <select id="fx-profile-select"></select>
-              </label>
-
-              <div id="fx-editor-summary" class="editor-summary mt-s"></div>
-
-              <div class="editor-grid mt">
-                <label>Pattern<select id="fx-profile-mode"></select></label>
-                <label>Fade Override (ms)<input id="fx-profile-fade" type="number" min="0" step="50" placeholder="0 = global"></label>
-                <label class="range-field editor-span">
-                  <span>Duration (s)</span>
-                  <span class="range-combo">
-                    <input id="fx-profile-speed-range" type="range" min="0" max="60" step="0.1">
-                    <input id="fx-profile-speed" type="number" min="0" max="60" step="0.1">
+                <div class="stat-chip stat-chip-tight">
+                  <span class="stat-chip-label">Duration</span>
+                  <span id="fx-chip-speed"></span>
+                </div>
+                <div class="stat-chip stat-chip-tight">
+                  <span class="stat-chip-label">Color</span>
+                  <span class="chip-inline">
+                    <span id="fx-chip-swatch" class="swatch swatch-sm"></span>
+                    <span id="fx-chip-color"></span>
                   </span>
-                </label>
-                <label>Color<input id="fx-profile-color" type="color"></label>
-                <label>Brightness Override (%)<input id="fx-profile-brightness" type="number" min="0" max="100" step="1" placeholder="0 = global"></label>
-              </div>
-
-              <div class="button-row mt">
-                <button class="btn" id="fx-save-profile-btn">Save This Status</button>
-                <button class="btn" id="fx-revert-profile-btn">Revert</button>
-                <button class="btn" id="fx-stop-preview-btn">Stop Preview</button>
+                </div>
+                <div class="stat-chip stat-chip-tight">
+                  <span class="stat-chip-label">Preview</span>
+                <span id="fx-chip-preview"></span>
               </div>
             </div>
-            <div id="fx-status" class="muted-line mt-s"></div>
+            <div class="live-strip-panel mt">
+              <div class="live-strip-head">
+                <span class="stat-chip-label">Live Strip Preview</span>
+                <span id="fx-live-caption" class="muted-line"></span>
+              </div>
+              <div id="fx-live-strip" class="live-strip" aria-label="Current LED preview"></div>
+            </div>
           </section>
 
-          <section class="card card-span-2">
+          <section class="card system-defaults-card">
             <div class="section-heading">
               <h2>System Defaults</h2>
               <span class="section-badge">Shared</span>
@@ -335,6 +298,81 @@
               </section>
             </div>
           </section>
+          </div>
+
+        <section class="card">
+          <div class="section-heading">
+            <h2>Status Editor</h2>
+            <span class="section-badge">Focused</span>
+          </div>
+          <p class="muted-line editor-intro">Choose one presence state to edit. It previews live while you tweak it, and only becomes permanent when you save.</p>
+
+            <div class="editor-shell mt-s">
+              <label class="editor-select-row">
+                <span>Status</span>
+                <select id="fx-profile-select"></select>
+              </label>
+
+              <div id="fx-editor-summary" class="editor-summary mt-s"></div>
+
+              <div class="editor-grid mt">
+                <label>Pattern<select id="fx-profile-mode"></select></label>
+                <label>Fade Override (ms)<input id="fx-profile-fade" type="number" min="0" step="50" placeholder="0 = global"></label>
+                <label class="range-field editor-span">
+                  <span>Duration (s)</span>
+                  <span class="range-combo">
+                    <input id="fx-profile-speed-range" type="range" min="0" max="60" step="0.1">
+                    <input id="fx-profile-speed" type="number" min="0" max="60" step="0.1">
+                  </span>
+                </label>
+                <div class="editor-span editor-detail-grid">
+                  <div class="color-chooser-block">
+                    <span class="field-label">Color</span>
+                    <div class="color-chooser-shell">
+                      <div class="color-chooser-preview">
+                        <button id="fx-profile-color-trigger" class="color-chooser-swatch" type="button" aria-label="Choose color">
+                          <span id="fx-profile-color-preview" class="color-chooser-fill"></span>
+                        </button>
+                        <div class="color-chooser-copy">
+                          <span class="color-chooser-title">Live Color</span>
+                          <span id="fx-profile-color-name" class="muted-line">Electric Green</span>
+                        </div>
+                      </div>
+                      <div class="color-chooser-fields">
+                        <label class="field-stack">
+                          Picker
+                          <input id="fx-profile-color" type="color" aria-label="Color picker">
+                        </label>
+                        <label class="field-stack">
+                          Hex
+                          <input id="fx-profile-color-hex" type="text" maxlength="7" spellcheck="false" placeholder="#00ff00">
+                        </label>
+                      </div>
+                      <div id="fx-profile-color-presets" class="color-preset-grid" aria-label="Color presets"></div>
+                    </div>
+                  </div>
+
+                  <div class="editor-side-stack">
+                    <label class="field-stack">
+                      Brightness Override (%)
+                      <input id="fx-profile-brightness" type="number" min="0" max="100" step="1" placeholder="0 = global">
+                    </label>
+
+                    <div class="editor-actions-panel">
+                      <span class="field-label">Actions</span>
+                      <div class="button-row">
+                        <button class="btn" id="fx-save-profile-btn">Save This Status</button>
+                        <button class="btn" id="fx-revert-profile-btn">Revert</button>
+                        <button class="btn" id="fx-stop-preview-btn">Stop Preview</button>
+                      </div>
+                      <div id="fx-status" class="muted-line mt-s"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+
         </div>
       </section>
 
@@ -363,7 +401,7 @@
       <section id="page-fw" class="page hidden">
         <div class="page-intro">
           <h1>Firmware</h1>
-          <p>Review the current build and install firmware or filesystem updates over the air.</p>
+          <p>Review the current build and install full device updates over the air.</p>
         </div>
 
         <div class="page-grid">
@@ -379,7 +417,7 @@
 
           <section class="card">
             <div class="section-heading">
-              <h2>Firmware OTA</h2>
+              <h2>Single Image OTA</h2>
             </div>
             <form id="fw-form" method="POST" action="/update" enctype="multipart/form-data" class="upload-stack">
               <input type="file" name="firmware" accept=".bin,.bin.gz" required>
@@ -388,22 +426,8 @@
                 <button class="btn" type="button" id="fw-view-ota-btn">View Last OTA Log</button>
               </div>
             </form>
-            <div class="hint mt-s">The device reboots automatically after a successful firmware update.</div>
+            <div class="hint mt-s">This one firmware image includes the web UI, setup portal, and API code. The device reboots automatically after a successful update.</div>
             <div id="fw-status" class="muted-line mt-s"></div>
-          </section>
-
-          <section class="card card-span-2">
-            <div class="section-heading">
-              <h2>Filesystem OTA</h2>
-            </div>
-            <form id="fw-fs-form" method="POST" action="/updatefs" enctype="multipart/form-data" class="upload-stack">
-              <input type="file" name="filesystem" accept=".bin,.bin.gz" required>
-              <div class="button-row">
-                <button class="btn" type="submit">Upload Filesystem</button>
-              </div>
-            </form>
-            <div class="hint mt-s">Use this after frontend changes to update the SPIFFS-hosted web UI assets.</div>
-            <div id="fw-fs-status" class="muted-line mt-s"></div>
           </section>
         </div>
 

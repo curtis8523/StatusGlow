@@ -37,6 +37,18 @@
       MIN_REFRESH_MS: 2000
     }
   };
+  const EFFECT_COLOR_PRESETS = [
+    { name: "Available", hex: "#00ff00" },
+    { name: "Focused", hex: "#32d6ff" },
+    { name: "Sky", hex: "#3f8cff" },
+    { name: "Call", hex: "#7a5cff" },
+    { name: "Magenta", hex: "#d91f8b" },
+    { name: "Busy", hex: "#ff5a5f" },
+    { name: "Warm", hex: "#ff9f1c" },
+    { name: "Away", hex: "#fff200" },
+    { name: "Soft White", hex: "#f4f7ff" },
+    { name: "Off", hex: "#000000" }
+  ];
 
   function $(id) {
     return document.getElementById(id);
@@ -267,6 +279,31 @@
     return (parseInt(hex.slice(1, 3), 16) << 16) |
       (parseInt(hex.slice(3, 5), 16) << 8) |
       parseInt(hex.slice(5, 7), 16);
+  }
+
+  function normalizeHexInput(value) {
+    let hex = String(value || "").trim().replace(/[^#0-9a-fA-F]/g, "");
+    if (!hex) return "";
+    if (hex.charAt(0) !== "#") hex = "#" + hex;
+    if (hex.length === 4) {
+      hex = "#" + hex.slice(1).split("").map(function (part) { return part + part; }).join("");
+    }
+    if (hex.length > 7) hex = hex.slice(0, 7);
+    return hex.toLowerCase();
+  }
+
+  function isValidHexColor(value) {
+    return /^#[0-9a-f]{6}$/i.test(String(value || ""));
+  }
+
+  function colorPresetName(hex) {
+    const normalized = normalizeHexInput(hex).toLowerCase();
+    const match = EFFECT_COLOR_PRESETS.find(function (preset) {
+      return preset.hex.toLowerCase() === normalized;
+    });
+    if (match) return match.name;
+    if (!isValidHexColor(normalized)) return "Custom";
+    return normalized === "#000000" ? "Off" : "Custom";
   }
 
   function formatUptime(ms) {
@@ -796,7 +833,7 @@
     });
   }
 
-  function renderEffectEditorSummary(profile) {
+  function renderEffectEditorSummaryLegacy(profile) {
     if (!profile) {
       safeText($("fx-editor-summary"), "No status profiles available.");
       return;
@@ -809,13 +846,52 @@
     );
   }
 
+  function setEffectColorChooser(hex) {
+    const normalized = normalizeHexInput(hex);
+    const value = isValidHexColor(normalized) ? normalized : "#000000";
+    if ($("fx-profile-color").value !== value) $("fx-profile-color").value = value;
+    if ($("fx-profile-color-hex").value !== value) $("fx-profile-color-hex").value = value;
+    if ($("fx-profile-color-preview")) {
+      $("fx-profile-color-preview").style.background = value;
+      $("fx-profile-color-preview").style.boxShadow = "inset 0 1px 0 rgba(255,255,255,.34), 0 0 24px " + value + "55";
+    }
+    safeText($("fx-profile-color-name"), colorPresetName(value));
+    Array.prototype.forEach.call(document.querySelectorAll(".color-preset"), function (button) {
+      const isActive = String(button.dataset.hex || "").toLowerCase() === value;
+      button.classList.toggle("is-active", isActive);
+      button.setAttribute("aria-pressed", isActive ? "true" : "false");
+    });
+  }
+
+  function renderEffectColorPresets() {
+    const host = $("fx-profile-color-presets");
+    if (!host || host.childElementCount) return;
+    EFFECT_COLOR_PRESETS.forEach(function (preset) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "color-preset";
+      button.dataset.hex = preset.hex.toLowerCase();
+      button.setAttribute("aria-label", preset.name + " " + preset.hex);
+      button.innerHTML =
+        '<span class="color-preset-swatch" style="background:' + preset.hex + '"></span>' +
+        '<span class="color-preset-name">' + preset.name + '</span>' +
+        '<span class="color-preset-value">' + preset.hex + "</span>";
+      button.addEventListener("click", function () {
+        setEffectColorChooser(preset.hex);
+        renderEffectEditorSummary(effectProfilePayloadFromForm());
+        scheduleEditorPreview();
+      });
+      host.appendChild(button);
+    });
+  }
+
   function fillEffectEditor(profile) {
     const select = $("fx-profile-select");
     if (select.value !== profile.key) select.value = profile.key;
     fillEffectModeSelect(profile.mode);
     $("fx-profile-speed").value = profile.speed || 0;
     $("fx-profile-speed-range").value = profile.speed || 0;
-    $("fx-profile-color").value = toHex(profile.color >>> 0);
+    setEffectColorChooser(toHex(profile.color >>> 0));
     $("fx-profile-fade").value = profile.fade_ms || 0;
     $("fx-profile-brightness").value = profile.bri ? Math.round((profile.bri * 100) / 255) : 0;
     renderEffectEditorSummary(profile);
@@ -1029,6 +1105,8 @@
   async function initEffects() {
     if (!APP.initialized.effects) {
       APP.initialized.effects = true;
+      renderEffectColorPresets();
+
       $("fx-brightness").addEventListener("input", function () {
         $("fx-brightness-range").value = $("fx-brightness").value;
       });
@@ -1047,19 +1125,45 @@
         });
       });
 
-      ["fx-profile-mode", "fx-profile-speed", "fx-profile-speed-range", "fx-profile-color", "fx-profile-fade", "fx-profile-brightness"].forEach(function (id) {
+      ["fx-profile-mode", "fx-profile-speed", "fx-profile-speed-range", "fx-profile-fade", "fx-profile-brightness"].forEach(function (id) {
         $(id).addEventListener("input", function () {
           if (id === "fx-profile-speed") $("fx-profile-speed-range").value = $("fx-profile-speed").value;
           if (id === "fx-profile-speed-range") $("fx-profile-speed").value = $("fx-profile-speed-range").value;
           renderEffectEditorSummary(effectProfilePayloadFromForm());
           scheduleEditorPreview();
         });
-        if (id === "fx-profile-mode" || id === "fx-profile-color") {
+        if (id === "fx-profile-mode") {
           $(id).addEventListener("change", function () {
             renderEffectEditorSummary(effectProfilePayloadFromForm());
             scheduleEditorPreview();
           });
         }
+      });
+
+      $("fx-profile-color-trigger").addEventListener("click", function () {
+        $("fx-profile-color").click();
+      });
+      $("fx-profile-color").addEventListener("input", function () {
+        setEffectColorChooser($("fx-profile-color").value);
+        renderEffectEditorSummary(effectProfilePayloadFromForm());
+        scheduleEditorPreview();
+      });
+      $("fx-profile-color").addEventListener("change", function () {
+        setEffectColorChooser($("fx-profile-color").value);
+        renderEffectEditorSummary(effectProfilePayloadFromForm());
+        scheduleEditorPreview();
+      });
+      $("fx-profile-color-hex").addEventListener("input", function () {
+        const normalized = normalizeHexInput($("fx-profile-color-hex").value);
+        $("fx-profile-color-hex").value = normalized;
+        if (!isValidHexColor(normalized)) return;
+        setEffectColorChooser(normalized);
+        renderEffectEditorSummary(effectProfilePayloadFromForm());
+        scheduleEditorPreview();
+      });
+      $("fx-profile-color-hex").addEventListener("blur", function () {
+        const normalized = normalizeHexInput($("fx-profile-color-hex").value);
+        setEffectColorChooser(isValidHexColor(normalized) ? normalized : $("fx-profile-color").value);
       });
 
       $("fx-save-profile-btn").addEventListener("click", async function () {
@@ -1232,12 +1336,6 @@
     ensureHiddenKey(form);
     form.addEventListener("submit", function (event) {
       handleOtaSubmit(event, "fw-form", "/update", "fw-status", "Firmware upload complete. Rebooting...");
-    });
-
-    const fsForm = $("fw-fs-form");
-    ensureHiddenKey(fsForm);
-    fsForm.addEventListener("submit", function (event) {
-      handleOtaSubmit(event, "fw-fs-form", "/updatefs", "fw-fs-status", "Filesystem upload complete. Rebooting...");
     });
 
     $("fw-view-ota-btn").addEventListener("click", async function () {

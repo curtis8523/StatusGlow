@@ -162,10 +162,6 @@ void handleGetSettings() {
 
 void handleClearSettings() {
 	DBG_PRINTLN("handleClearSettings()");
-	SPIFFS.remove(CONTEXT_FILE);
-	SPIFFS.remove(CONFIG_FILE);
-	SPIFFS.remove(EFFECTS_FILE);
-	SPIFFS.remove("/rizz.json");
 	memset(paramClientIdValue, 0, sizeof(paramClientIdValue));
 	memset(paramTenantValue, 0, sizeof(paramTenantValue));
 	memset(paramWifiSsidValue, 0, sizeof(paramWifiSsidValue));
@@ -173,6 +169,7 @@ void handleClearSettings() {
 	strlcpy(paramPollIntervalValue, DEFAULT_POLLING_PRESENCE_INTERVAL, sizeof(paramPollIntervalValue));
 	removePrefsKey(PREF_APP_CONFIG);
 	removePrefsKey(PREF_AUTH_CONTEXT);
+	removePrefsKey("ota_last_log");
 	clearWifiPrefs();
 	WiFi.persistent(true);
 	WiFi.disconnect(false, true);

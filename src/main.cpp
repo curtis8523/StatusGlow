@@ -14,8 +14,6 @@
 #include "driver/gpio.h"
 #endif
 #include <EEPROM.h>
-#include "FS.h"
-#include "SPIFFS.h"
 #include <time.h>
 #include <math.h>
 #include <stdarg.h>
@@ -25,6 +23,7 @@
 #include "freertos/semphr.h"
 #include "config.h"
 #include "led_effects.h"
+#include "generated/embedded_assets.h"
 #ifndef VERBOSE_LOG
 #define VERBOSE_LOG 0
 #endif
@@ -57,17 +56,15 @@ char paramTenantValue[STRING_LEN];
 char paramPollIntervalValue[INTEGER_LEN];
 char paramWifiSsidValue[STRING_LEN];
 char paramWifiPasswordValue[STRING_LEN];
-static bool gSpiffsReady = false;
 static const char* PREFS_NAMESPACE = "statusglow";
 static const char* PREF_WIFI_SSID = "wifi_ssid";
 static const char* PREF_WIFI_PASS = "wifi_pass";
 static const char* PREF_APP_CONFIG = "app_cfg";
 static const char* PREF_AUTH_CONTEXT = "auth_ctx";
+static const char* PREF_OTA_LAST_LOG = "ota_last_log";
 static bool loadJsonPrefs(const char* key, JsonDocument& doc);
 static bool saveJsonPrefs(const char* key, const JsonDocument& doc);
 static void removePrefsKey(const char* key);
-static void removeLegacyAppConfigFilesIfPresent();
-static void removeLegacyContextFileIfPresent();
 void onWifiConnected();
 void updateStatusLed();
 
@@ -121,7 +118,7 @@ void addLogf(const char* fmt, ...) {
 	addLog(tmp);
 }
 
-// Persistable OTA session log (written to SPIFFS after OTA completes)
+// Persistable OTA session log (stored in NVS after OTA completes)
 static String gOtaLog;
 static void otaLog(const char* msg) {
 	addLog(msg);
@@ -136,9 +133,18 @@ static void otaLogf(const char* fmt, ...) {
 	va_end(args);
 	otaLog(tmp);
 }
-static void otaLogSaveToFile() {
-	File f = SPIFFS.open("/ota_last.txt", "w");
-	if (f) { f.print(gOtaLog); f.close(); }
+static void otaLogSaveToPrefs() {
+	Preferences prefs;
+	if (!prefs.begin(PREFS_NAMESPACE, false)) return;
+	prefs.putString(PREF_OTA_LAST_LOG, gOtaLog);
+	prefs.end();
+}
+static String loadOtaLogFromPrefs() {
+	Preferences prefs;
+	if (!prefs.begin(PREFS_NAMESPACE, true)) return String();
+	String value = prefs.getString(PREF_OTA_LAST_LOG, "");
+	prefs.end();
+	return value;
 }
 
 // Build a recent logs string for server-side initial page render
@@ -245,60 +251,12 @@ void loadAppConfig() {
 	JsonDocument doc;
 	bool loadedFromPrefs = loadJsonPrefs(PREF_APP_CONFIG, doc);
 	if (!loadedFromPrefs) {
-		bool migratedFromSpiffs = false;
-		bool migratedEffectsFromSpiffs = false;
-		if (gSpiffsReady && SPIFFS.exists(CONFIG_FILE)) {
-			File f = SPIFFS.open(CONFIG_FILE, FILE_READ);
-			if (f) {
-				DeserializationError err = deserializeJson(doc, f);
-				f.close();
-				if (!err) {
-					saveJsonPrefs(PREF_APP_CONFIG, doc);
-					migratedFromSpiffs = true;
-				} else {
-					DBG_PRINT(F("loadAppConfig() - legacy parse error: "));
-					DBG_PRINTLN(err.c_str());
-				}
-			}
-		}
-		if (!migratedFromSpiffs && gSpiffsReady && SPIFFS.exists(EFFECTS_FILE)) {
-			File fe = SPIFFS.open(EFFECTS_FILE, FILE_READ);
-			if (fe) {
-				JsonDocument edoc;
-				if (!deserializeJson(edoc, fe)) {
-					migratedEffectsFromSpiffs = true;
-					if (!edoc["fade_ms"].isNull()) gFadeDurationMs = (uint16_t)edoc["fade_ms"].as<unsigned int>();
-					if (!edoc["brightness"].isNull()) { gDefaultBrightness = (uint8_t)edoc["brightness"].as<unsigned int>(); effects.setBrightness(gDefaultBrightness); }
-					if (!edoc["gamma"].isNull()) { gGamma = edoc["gamma"].as<float>(); if (isnan(gGamma) || gGamma < 0.1f) gGamma = 2.2f; if (gGamma > 5.0f) gGamma = 5.0f; effects.setGamma(gGamma); }
-					if (edoc["profiles"].is<JsonArray>()) {
-						JsonArray arr = edoc["profiles"].as<JsonArray>();
-						for (JsonObject o : arr) {
-							const char* key = o["key"] | "";
-							EffectProfile* p = findProfile(String(key));
-							if (p) {
-								if (!o["mode"].isNull()) p->mode = (uint16_t)o["mode"].as<unsigned int>();
-								if (!o["speed"].isNull()) p->speed = (uint16_t)o["speed"].as<unsigned int>();
-								if (!o["reverse"].isNull()) p->reverse = o["reverse"].as<bool>();
-								if (!o["color"].isNull()) p->color = o["color"].as<uint32_t>();
-								if (!o["fade_ms"].isNull()) p->fadeMs = (uint16_t)o["fade_ms"].as<unsigned int>();
-								if (!o["bri"].isNull()) p->bri = (uint8_t)o["bri"].as<unsigned int>();
-							}
-						}
-					}
-				}
-				fe.close();
-			}
-		}
 		numberLeds = NUMLEDS;
 		effects.setLength(numberLeds);
 		saveAppConfig();
-		if (migratedFromSpiffs || migratedEffectsFromSpiffs) {
-			removeLegacyAppConfigFilesIfPresent();
-		}
 		DBG_PRINTLN(F("loadAppConfig() - created initial NVS config"));
 		return;
 	}
-	removeLegacyAppConfigFilesIfPresent();
 	JsonObject sys = doc["system"];
 	if (!sys.isNull()) {
 		if (!sys["client_id"].isNull()) strlcpy(paramClientIdValue, sys["client_id"], sizeof(paramClientIdValue));
@@ -578,24 +536,6 @@ static const char* asyncJobStateName(AsyncJobState state) {
 	}
 }
 
-static bool isAllowedPublicAssetPath(String path) {
-	if (path.length() == 0) return false;
-	const int queryPos = path.indexOf('?');
-	if (queryPos >= 0) path.remove(queryPos);
-	if (path.endsWith("/")) path += "index.html";
-	static const char* const kAllowedPaths[] = {
-		"/app.css",
-		"/app.js",
-		"/favicon.ico",
-		"/logo.svg",
-		"/setup.html"
-	};
-	for (size_t i = 0; i < (sizeof(kAllowedPaths) / sizeof(kAllowedPaths[0])); ++i) {
-		if (path.equals(kAllowedPaths[i])) return true;
-	}
-	return false;
-}
-
 String getPresentedSharedKey() {
 	String k = server.header("X-StatusGlow-Key");
 	if (k.length() == 0) k = server.header("X-OTA-Key");
@@ -647,7 +587,7 @@ static bool parseJsonBody(JsonDocument& doc) {
 }
 
 static void sendUnauthorizedResponse(const char* scope) {
-	const bool structured = server.uri().startsWith("/api/") || server.uri().startsWith("/fs/");
+	const bool structured = server.uri().startsWith("/api/");
 	if (structured) {
 		sendApiError(401, "unauthorized", "A valid shared key is required for this request.", scope);
 	} else {
@@ -966,32 +906,6 @@ boolean loadContext() {
 	JsonDocument contextDoc;
 	bool loadedFromPrefs = loadJsonPrefs(PREF_AUTH_CONTEXT, contextDoc);
 
-	if (!loadedFromPrefs && gSpiffsReady) {
-		File file = SPIFFS.open(CONTEXT_FILE);
-		if (!file) {
-			DBG_PRINTLN(F("loadContext() - No file found"));
-		} else {
-			size_t size = file.size();
-			if (size == 0) {
-				DBG_PRINTLN(F("loadContext() - File empty"));
-			} else {
-				DeserializationError err = deserializeJson(contextDoc, file);
-				if (err) {
-					DBG_PRINT(F("loadContext() - deserializeJson() failed with code: "));
-					DBG_PRINTLN(err.c_str());
-				} else {
-					saveJsonPrefs(PREF_AUTH_CONTEXT, contextDoc);
-					loadedFromPrefs = true;
-					removeLegacyContextFileIfPresent();
-				}
-			}
-			file.close();
-		}
-	}
-	if (loadedFromPrefs) {
-		removeLegacyContextFileIfPresent();
-	}
-
 	if (loadedFromPrefs) {
 		int numSettings = 0;
 		if (!contextDoc["access_token"].isNull()) {
@@ -1025,9 +939,6 @@ boolean loadContext() {
 
 void removeContext() {
 	removePrefsKey(PREF_AUTH_CONTEXT);
-	if (gSpiffsReady) {
-		SPIFFS.remove(CONTEXT_FILE);
-	}
 	DBG_PRINTLN(F("removeContext() - Success"));
 }
 
@@ -1079,37 +990,82 @@ void syncTime() {
 }
 
 #include "request_handler.h"
-#include "spiffs_webserver.h"
 
-static void serveStaticPageOr500(const char* path) {
-	if (!handleFileRead(String(path))) {
+static String normalizeAssetPath(String path) {
+	const int queryPos = path.indexOf('?');
+	if (queryPos >= 0) path.remove(queryPos);
+	if (path.length() == 0) path = "/";
+	if (path.endsWith("/")) path += "index.html";
+	return path;
+}
+
+static const EmbeddedAsset* findEmbeddedAsset(const String& path) {
+	for (size_t i = 0; i < kEmbeddedAssetCount; ++i) {
+		if (path.equals(kEmbeddedAssets[i].path)) return &kEmbeddedAssets[i];
+	}
+	return nullptr;
+}
+
+static bool clientAcceptsGzip() {
+	String acceptEncoding = server.header("Accept-Encoding");
+	acceptEncoding.toLowerCase();
+	return acceptEncoding.indexOf("gzip") >= 0;
+}
+
+static bool isHtmlContentType(const char* contentType) {
+	return contentType && strncmp(contentType, "text/html", 9) == 0;
+}
+
+static void serveEmbeddedAsset(const EmbeddedAsset& asset) {
+	const uint8_t* payload = asset.rawData;
+	size_t payloadLength = asset.rawLength;
+	const bool serveGzip = asset.gzipData && asset.gzipLength > 0 && clientAcceptsGzip();
+	if (serveGzip) {
+		payload = asset.gzipData;
+		payloadLength = asset.gzipLength;
+		server.sendHeader("Content-Encoding", "gzip");
+		server.sendHeader("Vary", "Accept-Encoding");
+	}
+	if (isHtmlContentType(asset.contentType)) {
+		server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+		server.sendHeader("Pragma", "no-cache");
+		server.sendHeader("Expires", "0");
+	} else {
+		server.sendHeader("Cache-Control", "public, max-age=86400");
+	}
+	server.send_P(200, asset.contentType, reinterpret_cast<PGM_P>(payload), payloadLength);
+}
+
+static bool serveEmbeddedAssetPath(String path) {
+	const EmbeddedAsset* asset = findEmbeddedAsset(normalizeAssetPath(path));
+	if (!asset) return false;
+	serveEmbeddedAsset(*asset);
+	return true;
+}
+
+static void serveEmbeddedPageOr500(const char* path) {
+	if (!serveEmbeddedAssetPath(String(path))) {
 		server.send(
 			500,
 			"text/html; charset=utf-8",
-			F("<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>StatusGlow UI Missing</title></head><body style='font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;padding:24px;line-height:1.5'><h1>StatusGlow UI files are missing</h1><p>The firmware is running, but the static web UI was not found in SPIFFS.</p><p>Upload the filesystem image for the active environment, then refresh this page.</p><pre>pio run -e seeed_xiao_esp32s3 -t uploadfs</pre></body></html>")
+			F("<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>StatusGlow UI Missing</title></head><body style='font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;padding:24px;line-height:1.5'><h1>StatusGlow UI assets are missing</h1><p>The firmware is running, but the embedded web UI asset registry did not contain the requested page.</p></body></html>")
 		);
 	}
 }
 
 static void serveSetupPortalPage() {
-	serveStaticPageOr500("/setup.html");
+	serveEmbeddedPageOr500("/setup.html");
 }
 
-static void serveStaticAssetOr404(const char* path) {
-	if (!handleFileRead(String(path))) {
+static void serveEmbeddedAssetOr404(const char* path) {
+	if (!serveEmbeddedAssetPath(String(path))) {
 		server.send(404, "text/plain", "FileNotFound");
 	}
 }
 
-static void removeLegacyAppConfigFilesIfPresent() {
-	if (!gSpiffsReady) return;
-	if (SPIFFS.exists(CONFIG_FILE)) SPIFFS.remove(CONFIG_FILE);
-	if (SPIFFS.exists(EFFECTS_FILE)) SPIFFS.remove(EFFECTS_FILE);
-}
-
-static void removeLegacyContextFileIfPresent() {
-	if (!gSpiffsReady) return;
-	if (SPIFFS.exists(CONTEXT_FILE)) SPIFFS.remove(CONTEXT_FILE);
+static bool isAllowedPublicAssetPath(String path) {
+	const EmbeddedAsset* asset = findEmbeddedAsset(normalizeAssetPath(path));
+	return asset && asset->publicAsset;
 }
 
 static void fillWifiConnectJobJson(JsonObject obj) {
@@ -1844,14 +1800,6 @@ void setup()
 	// Initialize optional status LED only if enabled (pin from config)
 	ensureStatusLedReady();
 	
-	// Mount SPIFFS early so settings can be loaded before bringing up network/server
-	DBG_PRINTLN(F("SPIFFS.begin() "));
-	gSpiffsReady = SPIFFS.begin(true);
-	if(!gSpiffsReady) {
-		DBG_PRINTLN("SPIFFS Mount Failed");
-	} else {
-		ensureStatusLedReady();
-	}
 	const char* collectedHeaders[] = { "X-StatusGlow-Key", "X-OTA-Key", "Accept-Encoding" };
 	server.collectHeaders(collectedHeaders, 3);
 	loadEffectsConfig();
@@ -1959,65 +1907,7 @@ void setup()
 					otaLog("OTA end failed");
 					Update.printError(Serial);
 				}
-				otaLogSaveToFile();
-			}
-		}
-	);
-	server.on("/updatefs", HTTP_GET, []() {
-		if (!requireOtaAuth()) { otaLog("OTA GET /updatefs unauthorized"); return; }
-		otaLog("OTA GET /updatefs page served");
-		String page = buildOtaUploadPage("/updatefs", "filesystem", "Filesystem OTA");
-		server.send(200, "text/html", page);
-	});
-	server.on("/updatefs", HTTP_POST,
-		[]() {
-			if (!requireOtaAuth()) { otaLog("OTA POST /updatefs unauthorized"); return; }
-			bool ok = !Update.hasError();
-			otaLogf("Filesystem OTA finalize: %s", ok ? "OK" : "FAIL");
-			server.send(200, "text/plain", ok ? "OK" : "FAIL");
-			delay(200);
-			if (ok) ESP.restart();
-		},
-		[]() {
-			if (!isRequestAuthorized(gOtaSharedKey.c_str())) { otaLog("Filesystem OTA unauthorized (chunk)"); return; }
-			HTTPUpload &upload = server.upload();
-			static size_t s_fs_total = 0; static size_t s_fs_written = 0; static int s_fs_milestone = 0;
-			if (upload.status == UPLOAD_FILE_START) {
-				gOtaLog = String();
-				otaLogf("Filesystem OTA start: %s size=%u", upload.filename.c_str(), (unsigned)upload.totalSize);
-				beginOtaVisuals();
-				size_t total = upload.totalSize;
-				bool beginOk = (total > 0) ? Update.begin(total, U_SPIFFS) : Update.begin(UPDATE_SIZE_UNKNOWN, U_SPIFFS);
-				if (!beginOk) {
-					otaLog("Filesystem OTA begin failed");
-					Update.printError(Serial);
-				}
-				s_fs_total = total; s_fs_written = 0; s_fs_milestone = 0;
-			} else if (upload.status == UPLOAD_FILE_WRITE) {
-				size_t wrote = Update.write(upload.buf, upload.currentSize);
-				if (wrote != upload.currentSize) {
-					otaLogf("Filesystem OTA write mismatch: wrote %u of %u", (unsigned)wrote, (unsigned)upload.currentSize);
-				}
-				s_fs_written += upload.currentSize;
-				if (s_fs_total > 0) {
-					int pct = (int)((s_fs_written * 100) / s_fs_total);
-					int target = (s_fs_milestone + 1) * 25;
-					if (target <= 75 && pct >= target) { otaLogf("Filesystem OTA progress: %d%%", target); s_fs_milestone++; }
-				}
-				static bool t = false; t = !t;
-				EFFECTS_LOCK();
-				effects.strip.setPixelColor(0, t ? effects.Color(255,255,255) : effects.Color(0,0,0));
-				effects.strip.show();
-				EFFECTS_UNLOCK();
-			} else if (upload.status == UPLOAD_FILE_END) {
-				bool ok = Update.end(true);
-				if (ok) {
-					otaLogf("Filesystem OTA end OK, size=%u", (unsigned)upload.totalSize);
-				} else {
-					otaLog("Filesystem OTA end failed");
-					Update.printError(Serial);
-				}
-				otaLogSaveToFile();
+				otaLogSaveToPrefs();
 			}
 		}
 	);
@@ -2043,7 +1933,7 @@ void setup()
 			return;
 		}
 		if (!requireAdminAuth()) return;
-		serveStaticPageOr500("/index.html");
+		serveEmbeddedPageOr500("/index.html");
 	});
 	server.on("/setup.html", HTTP_ANY, [] {
 		if (isSetupPortalActive()) {
@@ -2051,19 +1941,19 @@ void setup()
 			return;
 		}
 		if (!requireAdminAuth()) return;
-		serveStaticPageOr500("/index.html");
+		serveEmbeddedPageOr500("/index.html");
 	});
 	server.on("/app.css", HTTP_ANY, [] {
-		serveStaticAssetOr404("/app.css");
+		serveEmbeddedAssetOr404("/app.css");
 	});
 	server.on("/app.js", HTTP_ANY, [] {
-		serveStaticAssetOr404("/app.js");
+		serveEmbeddedAssetOr404("/app.js");
 	});
 	server.on("/favicon.ico", HTTP_ANY, [] {
-		serveStaticAssetOr404("/favicon.ico");
+		serveEmbeddedAssetOr404("/favicon.ico");
 	});
 	server.on("/logo.svg", HTTP_ANY, [] {
-		serveStaticAssetOr404("/logo.svg");
+		serveEmbeddedAssetOr404("/logo.svg");
 	});
 	server.on("/apple-touch-icon.png", HTTP_ANY, serveNoContent);
 	server.on("/apple-touch-icon-precomposed.png", HTTP_ANY, serveNoContent);
@@ -2077,7 +1967,7 @@ void setup()
 			return;
 		}
 		if (!requireAdminAuth()) return;
-		serveStaticPageOr500("/index.html");
+		serveEmbeddedPageOr500("/index.html");
 	});
 	server.on("/", HTTP_ANY, [] {
 		if (isSetupPortalActive()) {
@@ -2085,7 +1975,7 @@ void setup()
 			return;
 		}
 		if (!requireAdminAuth()) return;
-		serveStaticPageOr500("/index.html");
+		serveEmbeddedPageOr500("/index.html");
 	});
 	server.on("/api/health", HTTP_GET, [] {
 		JsonDocument d;
@@ -2098,10 +1988,9 @@ void setup()
 	});
 	server.on("/api/ota_last", HTTP_GET, [] {
 		if (!requireOtaAuth()) return;
-		File f = SPIFFS.open("/ota_last.txt", "r");
-		if (!f) { sendApiError(404, "no_ota_log", "No OTA log has been saved yet."); return; }
-		server.streamFile(f, "text/plain; charset=utf-8");
-		f.close();
+		String logText = loadOtaLogFromPrefs();
+		if (logText.length() == 0) { sendApiError(404, "no_ota_log", "No OTA log has been saved yet."); return; }
+		server.send(200, "text/plain; charset=utf-8", logText);
 	});
 	server.on("/config", HTTP_ANY, [] {
 		if (isSetupPortalActive()) {
@@ -2109,15 +1998,7 @@ void setup()
 			return;
 		}
 		if (!requireAdminAuth()) return;
-		serveStaticPageOr500("/index.html");
-	});
-	server.on("/upload", HTTP_ANY, [] {
-		if (isSetupPortalActive()) {
-			serveSetupPortalPage();
-			return;
-		}
-		if (!requireAdminAuth()) return;
-		handleMinimalUpload();
+		serveEmbeddedPageOr500("/index.html");
 	});
 	server.on("/fw", HTTP_ANY, [](){
 		if (isSetupPortalActive()) {
@@ -2125,7 +2006,7 @@ void setup()
 			return;
 		}
 		if (!requireOtaAuth()) return;
-		serveStaticPageOr500("/index.html");
+		serveEmbeddedPageOr500("/index.html");
 	});
 	server.on("/api/startDevicelogin", HTTP_GET, [] {
 		if (!requireAdminAuth()) return;
@@ -2141,7 +2022,7 @@ void setup()
 			return;
 		}
 		if (!requireAdminAuth()) return;
-		serveStaticPageOr500("/index.html");
+		serveEmbeddedPageOr500("/index.html");
 	});
 	server.on("/api/wifi", HTTP_GET, [] {
 		if (!isSetupPortalActive() && !requireAdminAuth()) return;
@@ -2465,32 +2346,20 @@ void setup()
 			EFFECTS_UNLOCK();
 			sendJsonDocument(200, d);
 		});
-	server.on("/fs/delete", HTTP_DELETE, []() {
-		if (!requireAdminAuth()) return;
-		handleFileDelete();
-	});
-	server.on("/fs/list", HTTP_GET, []() {
-		if (!requireAdminAuth()) return;
-		handleFileList();
-	});
-	server.on("/fs/upload", HTTP_POST, []() {
-		if (!requireAdminAuth()) return;
-		sendApiOk(200);
-	}, handleFileUpload);
-		server.on("/effects", HTTP_ANY, []() {
+	server.on("/effects", HTTP_ANY, []() {
 			if (isSetupPortalActive()) {
 				serveSetupPortalPage();
 				return;
 			}
 			if (!requireAdminAuth()) return;
-			serveStaticPageOr500("/index.html");
+			serveEmbeddedPageOr500("/index.html");
 		});
 	server.onNotFound([]() {
 		if (shouldRedirectToCaptivePortal()) {
 			handleCaptivePortalRequest();
 			return;
 		}
-		if (isAllowedPublicAssetPath(server.uri()) && handleFileRead(server.uri())) return;
+		if (isAllowedPublicAssetPath(server.uri()) && serveEmbeddedAssetPath(server.uri())) return;
 		server.send(404, "text/plain", "FileNotFound");
 	});
 	server.begin();

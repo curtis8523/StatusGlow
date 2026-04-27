@@ -3,7 +3,7 @@
 // Global firmware configuration constants
 
 // Version
-#define VERSION "1.0.1"
+#define VERSION "1.1.0"
 
 // Networking and timing
 #define DEFAULT_POLLING_PRESENCE_INTERVAL "30"   // Polling interval (seconds) as string
@@ -16,11 +16,6 @@
 #define APP_DEFAULT_BRIGHTNESS 128  // 0-255 default brightness
 #define DEFAULT_GAMMA 2.2f          // gamma correction factor
 #define DEFAULT_LED_TYPE_RGBW false // Default: RGB (false), RGBW (true)
-
-// Filesystem paths
-#define CONTEXT_FILE "/context.json"
-#define EFFECTS_FILE "/effects.json"
-#define CONFIG_FILE "/config.json"
 
 // Device/AP name
 #define THING_NAME "StatusGlow"

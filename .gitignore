@@ -56,5 +56,7 @@ config_local.h
 build/
 dist/
 
-# Generated compressed web assets
+# Generated embedded web assets
+include/generated/embedded_assets.h
+src/generated/embedded_assets.cpp
 data/*.gz

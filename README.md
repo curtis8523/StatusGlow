@@ -13,10 +13,11 @@ It is set up for:
 - Displays status with configurable LED effects and colors
 - Plays a short startup light sequence before handing off to live status
 - Lets you change RGB/RGBW mode at runtime
-- Hosts a local web UI for config, effects, logs, firmware upload, and filesystem OTA upload
+- Hosts a local web UI for config, effects, logs, and single-image OTA updates
 - Falls back to a local AP when Wi-Fi is not configured
-- Stores Wi-Fi, app settings, effects, and Microsoft auth context in ESP32 NVS so they survive normal flashes and `uploadfs`
+- Stores Wi-Fi, app settings, effects, Microsoft auth context, and OTA history in ESP32 NVS
 - Supports an onboard status LED on ESP32-S3 boards that have one on GPIO21
+- Embeds the web UI directly into the firmware image, so there is only one file to flash
 
 ## Default Hardware Settings
 
@@ -34,7 +35,6 @@ Install PlatformIO, then from the project root:
 ```bash
 pio run -e seeed_xiao_esp32s3
 pio run -e seeed_xiao_esp32s3 -t upload
-pio run -e seeed_xiao_esp32s3 -t uploadfs
 ```
 
 Other environments:
@@ -44,9 +44,7 @@ pio run -e seeed_xiao_esp32c3 -t upload
 pio run -e waveshare_esp32s3_zero -t upload
 ```
 
-`uploadfs` pushes the static web UI and assets from `data/`.
-
-Use both `upload` and `uploadfs` after frontend changes. For firmware-only changes, `upload` is enough.
+The web UI assets from `data/` are embedded into the firmware at build time, so `upload` flashes everything in one image.
 
 ## First-Time Setup
 
@@ -112,8 +110,8 @@ Then click `Start device login`, open the Microsoft device login page, and compl
 - [src/config.h](src/config.h): runtime defaults, AP password, optional web UI / OTA key, status LED settings
 - [src/main.cpp](src/main.cpp): firmware logic and API routes
 - [src/request_handler.h](src/request_handler.h): API helpers and Microsoft device-login handlers
-- [src/spiffs_webserver.h](src/spiffs_webserver.h): SPIFFS/static-file helpers and upload endpoints
-- `data/`: static web UI (`index.html`, `setup.html`, `app.css`, `app.js`) and assets
+- `data/`: source web UI assets (`index.html`, `setup.html`, `app.css`, `app.js`) that are embedded into the firmware during build
+- [scripts/embed_assets.py](scripts/embed_assets.py): build-time asset packer for the embedded web UI
 
 ## Common Tasks
 
@@ -129,15 +127,7 @@ Upload firmware OTA:
 
 - Open the Firmware page
 - Upload the `.bin`
-
-Upload the SPIFFS/web UI image OTA:
-
-- Open the Firmware page
-- Upload the filesystem image such as `spiffs.bin`
-
-Recover the web UI after changing frontend files over USB:
-
-- Run `pio run -e <env> -t uploadfs`
+- The uploaded firmware image already contains the web UI and setup portal
 
 Factory reset:
 
@@ -173,7 +163,7 @@ Teams status does not update:
 
 Assets like logo/favicon do not appear:
 
-- Run `pio run -e <env> -t uploadfs`
+- Rebuild and upload the firmware image so the embedded assets are refreshed
 
 ## License
 
