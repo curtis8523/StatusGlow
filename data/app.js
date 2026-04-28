@@ -578,6 +578,8 @@
           const result = await saveConfigPayload(payload);
           if (result && result.needs_reboot) {
             setMessage("cfg-status", "Settings saved. LED type changed, so a reboot is required.");
+          } else if (result && result.auth_reset) {
+            setMessage("cfg-status", "Settings saved. Microsoft auth was cleared because the client or tenant changed, so device login must be completed again.");
           } else {
             setMessage("cfg-status", "Settings saved.");
           }

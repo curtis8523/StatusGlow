@@ -224,12 +224,9 @@ void handleClearSettings() {
 	memset(paramWifiPasswordValue, 0, sizeof(paramWifiPasswordValue));
 	strlcpy(paramPollIntervalValue, DEFAULT_POLLING_PRESENCE_INTERVAL, sizeof(paramPollIntervalValue));
 	removePrefsKey(PREF_APP_CONFIG);
-	removePrefsKey(PREF_AUTH_CONTEXT);
-	removePrefsKey(PREF_CLIENT_ID);
-	removePrefsKey(PREF_TENANT_ID);
-	removePrefsKey(PREF_NUM_LEDS);
-	removePrefsKey(PREF_POLL_INTERVAL);
-	removePrefsKey("ota_last_log");
+	removeContext();
+	clearLegacySettingsPrefs();
+	removePrefsKey(PREF_OTA_LAST_LOG);
 	clearWifiPrefs();
 	WiFi.persistent(true);
 	WiFi.disconnect(false, true);

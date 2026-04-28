@@ -48,7 +48,8 @@ String gOtaSharedKey;
 DNSServer dnsServer;
 WebServer server(80);
 
-// App parameters (persisted in unified /config.json)
+// App parameters. General settings/effects live in unified app_cfg JSON.
+// Wi-Fi credentials and auth tokens are intentionally stored in separate keys.
 #define STRING_LEN 64
 #define INTEGER_LEN 16
 char paramClientIdValue[STRING_LEN];
@@ -64,20 +65,25 @@ static const char* PREF_AUTH_CONTEXT = "auth_ctx";
 static const char* PREF_AUTH_ACCESS_TOKEN = "auth_access";
 static const char* PREF_AUTH_REFRESH_TOKEN = "auth_refresh";
 static const char* PREF_AUTH_ID_TOKEN = "auth_id";
-static const char* PREF_CLIENT_ID = "ms_client";
-static const char* PREF_TENANT_ID = "ms_tenant";
-static const char* PREF_NUM_LEDS = "num_leds";
-static const char* PREF_POLL_INTERVAL = "poll_int";
+// Legacy keys kept only long enough to migrate older installs into app_cfg.
+static const char* PREF_LEGACY_CLIENT_ID = "ms_client";
+static const char* PREF_LEGACY_TENANT_ID = "ms_tenant";
+static const char* PREF_LEGACY_NUM_LEDS = "num_leds";
+static const char* PREF_LEGACY_POLL_INTERVAL = "poll_int";
 static const char* PREF_OTA_LAST_LOG = "ota_last_log";
 static bool loadJsonPrefs(const char* key, JsonDocument& doc);
 static bool saveJsonPrefs(const char* key, const JsonDocument& doc);
-static bool savePollIntervalPref(unsigned int pollSeconds);
-static bool loadPollIntervalPref(unsigned int& pollSeconds);
-static bool saveStringPref(const char* key, const char* value);
-static bool loadStringPref(const char* key, String& value);
-static bool saveUIntPref(const char* key, unsigned int value);
-static bool loadUIntPref(const char* key, unsigned int& value);
+static bool loadLegacyPollIntervalPref(unsigned int& pollSeconds);
+static bool loadLegacyStringPref(const char* key, String& value);
+static bool loadLegacyUIntPref(const char* key, unsigned int& value);
 static void removePrefsKey(const char* key);
+static void clearLegacySettingsPrefs();
+static void resetAppConfigToDefaults();
+static bool migrateLegacyAppConfig(JsonDocument& doc);
+static void saveWifiPrefs(const char* ssid, const char* pass);
+static void clearWifiPrefs();
+static void loadWifiPrefs();
+void removeContext();
 void onWifiConnected();
 void updateStatusLed();
 
@@ -221,6 +227,24 @@ EffectProfile* findProfile(const String& k) {
 	return nullptr;
 }
 
+static void resetAppConfigToDefaults() {
+	memset(paramClientIdValue, 0, sizeof(paramClientIdValue));
+	memset(paramTenantValue, 0, sizeof(paramTenantValue));
+	memset(paramWifiSsidValue, 0, sizeof(paramWifiSsidValue));
+	memset(paramWifiPasswordValue, 0, sizeof(paramWifiPasswordValue));
+	strlcpy(paramPollIntervalValue, DEFAULT_POLLING_PRESENCE_INTERVAL, sizeof(paramPollIntervalValue));
+	numberLeds = NUMLEDS;
+	gFadeDurationMs = DEFAULT_FADE_MS;
+	gDefaultBrightness = APP_DEFAULT_BRIGHTNESS;
+	gGamma = DEFAULT_GAMMA;
+	gLedTypeRGBW = DEFAULT_LED_TYPE_RGBW;
+	gStatusLedEnabled = DEFAULT_STATUS_LED_ENABLED;
+	effects.setLength(numberLeds);
+	effects.setBrightness(gDefaultBrightness);
+	effects.setGamma(gGamma);
+	effects.setPixelType(gLedTypeRGBW);
+}
+
 // Save both system and effects settings into Preferences/NVS (unified config)
 void saveAppConfig() {
 	JsonDocument doc;
@@ -229,8 +253,6 @@ void saveAppConfig() {
 	sys["client_id"] = paramClientIdValue;
 	sys["tenant"] = paramTenantValue;
 	sys["poll_interval"] = pollSeconds;
-	sys["wifi_ssid"] = paramWifiSsidValue;
-	sys["wifi_password"] = paramWifiPasswordValue;
 	sys["num_leds"] = numberLeds;
 	sys["fade_ms"] = gFadeDurationMs;
 	sys["brightness"] = gDefaultBrightness;
@@ -250,10 +272,7 @@ void saveAppConfig() {
 		o["bri"] = gProfiles[i].bri;
 	}
 	saveJsonPrefs(PREF_APP_CONFIG, doc);
-	saveStringPref(PREF_CLIENT_ID, paramClientIdValue);
-	saveStringPref(PREF_TENANT_ID, paramTenantValue);
-	saveUIntPref(PREF_NUM_LEDS, (unsigned int)numberLeds);
-	savePollIntervalPref(pollSeconds);
+	clearLegacySettingsPrefs();
 }
 
 // Backwards-compat wrapper
@@ -263,67 +282,40 @@ void saveEffectsConfig() {
 
 
 void loadAppConfig() {
-	strlcpy(paramPollIntervalValue, DEFAULT_POLLING_PRESENCE_INTERVAL, sizeof(paramPollIntervalValue));
-	memset(paramClientIdValue, 0, sizeof(paramClientIdValue));
-	memset(paramTenantValue, 0, sizeof(paramTenantValue));
-	memset(paramWifiSsidValue, 0, sizeof(paramWifiSsidValue));
-	memset(paramWifiPasswordValue, 0, sizeof(paramWifiPasswordValue));
+	resetAppConfigToDefaults();
 	JsonDocument doc;
 	bool loadedFromPrefs = loadJsonPrefs(PREF_APP_CONFIG, doc);
-	String storedClientId;
-	String storedTenantId;
-	unsigned int storedNumLeds = 0;
-	unsigned int storedPollSeconds = 0;
-	bool loadedDedicatedClientId = loadStringPref(PREF_CLIENT_ID, storedClientId);
-	bool loadedDedicatedTenantId = loadStringPref(PREF_TENANT_ID, storedTenantId);
-	bool loadedDedicatedNumLeds = loadUIntPref(PREF_NUM_LEDS, storedNumLeds);
-	bool loadedDedicatedPollInterval = loadPollIntervalPref(storedPollSeconds);
 	if (!loadedFromPrefs) {
-		numberLeds = NUMLEDS;
-		if (loadedDedicatedClientId) strlcpy(paramClientIdValue, storedClientId.c_str(), sizeof(paramClientIdValue));
-		if (loadedDedicatedTenantId) strlcpy(paramTenantValue, storedTenantId.c_str(), sizeof(paramTenantValue));
-		if (loadedDedicatedNumLeds && storedNumLeds > 0) numberLeds = (int)storedNumLeds;
-		effects.setLength(numberLeds);
-		if (loadedDedicatedPollInterval) {
-			snprintf(paramPollIntervalValue, sizeof(paramPollIntervalValue), "%u", storedPollSeconds);
-		}
+		doc.clear();
+	}
+	bool migratedLegacy = migrateLegacyAppConfig(doc);
+
+	if (!loadedFromPrefs && !migratedLegacy) {
 		saveAppConfig();
 		DBG_PRINTLN(F("loadAppConfig() - created initial NVS config"));
 		return;
 	}
+
 	JsonObject sys = doc["system"];
 	if (!sys.isNull()) {
-		if (loadedDedicatedClientId) {
-			strlcpy(paramClientIdValue, storedClientId.c_str(), sizeof(paramClientIdValue));
-		} else if (!sys["client_id"].isNull()) {
+		if (!sys["client_id"].isNull()) {
 			strlcpy(paramClientIdValue, sys["client_id"], sizeof(paramClientIdValue));
-			saveStringPref(PREF_CLIENT_ID, paramClientIdValue);
 		}
-		if (loadedDedicatedTenantId) {
-			strlcpy(paramTenantValue, storedTenantId.c_str(), sizeof(paramTenantValue));
-		} else if (!sys["tenant"].isNull()) {
+		if (!sys["tenant"].isNull()) {
 			strlcpy(paramTenantValue, sys["tenant"], sizeof(paramTenantValue));
-			saveStringPref(PREF_TENANT_ID, paramTenantValue);
 		}
-		if (loadedDedicatedPollInterval) {
-			snprintf(paramPollIntervalValue, sizeof(paramPollIntervalValue), "%u", storedPollSeconds);
-		} else if (!sys["poll_interval"].isNull()) {
+		if (!sys["poll_interval"].isNull()) {
 			unsigned int pollSeconds = sys["poll_interval"].as<unsigned int>();
 			if (pollSeconds == 0) {
 				pollSeconds = (unsigned int)atoi(DEFAULT_POLLING_PRESENCE_INTERVAL);
 			}
 			snprintf(paramPollIntervalValue, sizeof(paramPollIntervalValue), "%u", pollSeconds);
-			savePollIntervalPref(pollSeconds);
 		}
-		if (!sys["wifi_ssid"].isNull()) strlcpy(paramWifiSsidValue, sys["wifi_ssid"], sizeof(paramWifiSsidValue));
-		if (!sys["wifi_password"].isNull()) strlcpy(paramWifiPasswordValue, sys["wifi_password"], sizeof(paramWifiPasswordValue));
-		if (loadedDedicatedNumLeds && storedNumLeds > 0) {
-			numberLeds = (int)storedNumLeds;
-			effects.setLength(numberLeds);
-		} else if (!sys["num_leds"].isNull()) {
+		if (!sys["num_leds"].isNull()) {
 			numberLeds = (int)sys["num_leds"].as<int>();
+			if (numberLeds < 1) numberLeds = 1;
+			if (numberLeds > 1024) numberLeds = 1024;
 			effects.setLength(numberLeds);
-			saveUIntPref(PREF_NUM_LEDS, (unsigned int)numberLeds);
 		}
 		if (!sys["fade_ms"].isNull()) gFadeDurationMs = (uint16_t)sys["fade_ms"].as<unsigned int>();
 		if (!sys["brightness"].isNull()) { gDefaultBrightness = (uint8_t)sys["brightness"].as<unsigned int>(); effects.setBrightness(gDefaultBrightness); }
@@ -346,6 +338,10 @@ void loadAppConfig() {
 				if (!o["bri"].isNull()) p->bri = (uint8_t)o["bri"].as<unsigned int>();
 			}
 		}
+	}
+	if (migratedLegacy) {
+		saveAppConfig();
+		DBG_PRINTLN(F("loadAppConfig() - migrated legacy config"));
 	}
 	DBG_PRINTLN(F("loadAppConfig() - applied"));
 }
@@ -526,67 +522,35 @@ static bool saveJsonPrefs(const char* key, const JsonDocument& doc) {
 	return ok;
 }
 
-static bool savePollIntervalPref(unsigned int pollSeconds) {
-	Preferences prefs;
-	if (!prefs.begin(PREFS_NAMESPACE, false)) {
-		DBG_PRINTLN(F("savePollIntervalPref() - open failed"));
-		return false;
-	}
-	bool ok = prefs.putUInt(PREF_POLL_INTERVAL, pollSeconds) > 0;
-	prefs.end();
-	return ok;
-}
-
-static bool loadPollIntervalPref(unsigned int& pollSeconds) {
+static bool loadLegacyPollIntervalPref(unsigned int& pollSeconds) {
 	Preferences prefs;
 	if (!prefs.begin(PREFS_NAMESPACE, true)) {
-		DBG_PRINTLN(F("loadPollIntervalPref() - open failed"));
+		DBG_PRINTLN(F("loadLegacyPollIntervalPref() - open failed"));
 		return false;
 	}
-	unsigned int stored = prefs.getUInt(PREF_POLL_INTERVAL, 0);
+	unsigned int stored = prefs.getUInt(PREF_LEGACY_POLL_INTERVAL, 0);
 	prefs.end();
 	if (stored == 0) return false;
 	pollSeconds = stored;
 	return true;
 }
 
-static bool saveStringPref(const char* key, const char* value) {
-	Preferences prefs;
-	if (!prefs.begin(PREFS_NAMESPACE, false)) {
-		DBG_PRINTLN(F("saveStringPref() - open failed"));
-		return false;
-	}
-	bool ok = prefs.putString(key, value ? value : "") > 0;
-	prefs.end();
-	return ok;
-}
-
-static bool loadStringPref(const char* key, String& value) {
+static bool loadLegacyStringPref(const char* key, String& value) {
 	Preferences prefs;
 	if (!prefs.begin(PREFS_NAMESPACE, true)) {
-		DBG_PRINTLN(F("loadStringPref() - open failed"));
+		DBG_PRINTLN(F("loadLegacyStringPref() - open failed"));
 		return false;
 	}
 	value = prefs.getString(key, "");
 	prefs.end();
+	value.trim();
 	return value.length() > 0;
 }
 
-static bool saveUIntPref(const char* key, unsigned int value) {
-	Preferences prefs;
-	if (!prefs.begin(PREFS_NAMESPACE, false)) {
-		DBG_PRINTLN(F("saveUIntPref() - open failed"));
-		return false;
-	}
-	bool ok = prefs.putUInt(key, value) > 0;
-	prefs.end();
-	return ok;
-}
-
-static bool loadUIntPref(const char* key, unsigned int& value) {
+static bool loadLegacyUIntPref(const char* key, unsigned int& value) {
 	Preferences prefs;
 	if (!prefs.begin(PREFS_NAMESPACE, true)) {
-		DBG_PRINTLN(F("loadUIntPref() - open failed"));
+		DBG_PRINTLN(F("loadLegacyUIntPref() - open failed"));
 		return false;
 	}
 	unsigned int stored = prefs.getUInt(key, 0);
@@ -594,6 +558,72 @@ static bool loadUIntPref(const char* key, unsigned int& value) {
 	if (stored == 0) return false;
 	value = stored;
 	return true;
+}
+
+static void clearLegacySettingsPrefs() {
+	removePrefsKey(PREF_LEGACY_CLIENT_ID);
+	removePrefsKey(PREF_LEGACY_TENANT_ID);
+	removePrefsKey(PREF_LEGACY_NUM_LEDS);
+	removePrefsKey(PREF_LEGACY_POLL_INTERVAL);
+}
+
+static bool migrateLegacyAppConfig(JsonDocument& doc) {
+	bool changed = false;
+	JsonObject sys = doc["system"].to<JsonObject>();
+
+	String legacyClientId;
+	if ((sys["client_id"].isNull() || String(sys["client_id"].as<const char*>()).length() == 0) &&
+		loadLegacyStringPref(PREF_LEGACY_CLIENT_ID, legacyClientId)) {
+		sys["client_id"] = legacyClientId;
+		changed = true;
+	}
+
+	String legacyTenantId;
+	if ((sys["tenant"].isNull() || String(sys["tenant"].as<const char*>()).length() == 0) &&
+		loadLegacyStringPref(PREF_LEGACY_TENANT_ID, legacyTenantId)) {
+		sys["tenant"] = legacyTenantId;
+		changed = true;
+	}
+
+	unsigned int legacyPollInterval = 0;
+	if ((sys["poll_interval"].isNull() || sys["poll_interval"].as<unsigned int>() == 0) &&
+		loadLegacyPollIntervalPref(legacyPollInterval)) {
+		sys["poll_interval"] = legacyPollInterval;
+		changed = true;
+	}
+
+	unsigned int legacyNumLeds = 0;
+	if ((sys["num_leds"].isNull() || sys["num_leds"].as<unsigned int>() == 0) &&
+		loadLegacyUIntPref(PREF_LEGACY_NUM_LEDS, legacyNumLeds)) {
+		sys["num_leds"] = legacyNumLeds;
+		changed = true;
+	}
+
+	String legacyWifiSsid = sys["wifi_ssid"] | "";
+	String legacyWifiPassword = sys["wifi_password"] | "";
+	legacyWifiSsid.trim();
+	if (legacyWifiSsid.length() > 0) {
+		Preferences prefs;
+		if (prefs.begin(PREFS_NAMESPACE, true)) {
+			String savedSsid = prefs.getString(PREF_WIFI_SSID, "");
+			prefs.end();
+			savedSsid.trim();
+			if (savedSsid.length() == 0) {
+				saveWifiPrefs(legacyWifiSsid.c_str(), legacyWifiPassword.c_str());
+			}
+		}
+	}
+	if (!sys["wifi_ssid"].isNull()) {
+		sys.remove("wifi_ssid");
+		changed = true;
+	}
+	if (!sys["wifi_password"].isNull()) {
+		sys.remove("wifi_password");
+		changed = true;
+	}
+
+	clearLegacySettingsPrefs();
+	return changed;
 }
 
 static bool savePrefsBlobString(const char* key, const String& value) {
@@ -689,25 +719,21 @@ static void clearWifiPrefs() {
 
 static void loadWifiPrefs() {
 	Preferences prefs;
-	if (!prefs.begin(PREFS_NAMESPACE, false)) {
+	if (!prefs.begin(PREFS_NAMESPACE, true)) {
 		DBG_PRINTLN(F("loadWifiPrefs() - open failed"));
 		return;
 	}
 	String savedSsid = prefs.getString(PREF_WIFI_SSID, "");
 	String savedPass = prefs.getString(PREF_WIFI_PASS, "");
+	prefs.end();
 	savedSsid.trim();
 	if (savedSsid.length() > 0) {
 		strlcpy(paramWifiSsidValue, savedSsid.c_str(), sizeof(paramWifiSsidValue));
 		strlcpy(paramWifiPasswordValue, savedPass.c_str(), sizeof(paramWifiPasswordValue));
 	} else {
-		String configSsid = String(paramWifiSsidValue);
-		configSsid.trim();
-		if (configSsid.length() > 0) {
-			prefs.putString(PREF_WIFI_SSID, configSsid);
-			prefs.putString(PREF_WIFI_PASS, String(paramWifiPasswordValue));
-		}
+		memset(paramWifiSsidValue, 0, sizeof(paramWifiSsidValue));
+		memset(paramWifiPasswordValue, 0, sizeof(paramWifiPasswordValue));
 	}
-	prefs.end();
 }
 
 static const char* asyncJobStateName(AsyncJobState state) {
@@ -2371,8 +2397,23 @@ void setup()
 		JsonDocument doc;
 		if (!parseJsonBody(doc)) return;
 		bool needsReboot = false;
-		if (!doc["client_id"].isNull()) { strlcpy(paramClientIdValue, doc["client_id"], sizeof(paramClientIdValue)); }
-		if (!doc["tenant"].isNull()) { strlcpy(paramTenantValue, doc["tenant"], sizeof(paramTenantValue)); }
+		bool authConfigChanged = false;
+		if (!doc["client_id"].isNull()) {
+			String nextClientId = doc["client_id"].as<String>();
+			nextClientId.trim();
+			String currentClientId = paramClientIdValue;
+			currentClientId.trim();
+			authConfigChanged = authConfigChanged || (nextClientId != currentClientId);
+			strlcpy(paramClientIdValue, nextClientId.c_str(), sizeof(paramClientIdValue));
+		}
+		if (!doc["tenant"].isNull()) {
+			String nextTenant = doc["tenant"].as<String>();
+			nextTenant.trim();
+			String currentTenant = paramTenantValue;
+			currentTenant.trim();
+			authConfigChanged = authConfigChanged || (nextTenant != currentTenant);
+			strlcpy(paramTenantValue, nextTenant.c_str(), sizeof(paramTenantValue));
+		}
 		if (!doc["poll_interval"].isNull()) {
 			unsigned int pollSeconds = doc["poll_interval"].as<unsigned int>();
 			if (pollSeconds == 0) {
@@ -2391,10 +2432,28 @@ void setup()
 			gStatusLedEnabled = doc["status_led_enabled"].as<bool>();
 			ensureStatusLedReady();
 		}
+		if (authConfigChanged) {
+			access_token = "";
+			refresh_token = "";
+			id_token = "";
+			expires = 0;
+			user_code = "";
+			device_code = "";
+			device_login_message = "";
+			device_login_verification_uri = "";
+			device_login_verification_uri_complete = "";
+			removeContext();
+			if (WiFi.status() == WL_CONNECTED) {
+				state = SMODEWIFICONNECTED;
+				tsPolling = 0;
+				retries = 0;
+			}
+		}
 		saveAppConfig();
 		JsonDocument resp; 
 		resp["ok"] = true; 
 		resp["needs_reboot"] = needsReboot;
+		resp["auth_reset"] = authConfigChanged;
 		sendJsonDocument(200, resp);
 	});
 	server.on("/api/clearSettings", HTTP_POST, [] {
