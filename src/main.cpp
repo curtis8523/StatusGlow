@@ -69,9 +69,22 @@ static const char* PREF_WIFI_SSID = "wifi_ssid";
 static const char* PREF_WIFI_PASS = "wifi_pass";
 static const char* PREF_APP_CONFIG = "app_cfg";
 static const char* PREF_AUTH_CONTEXT = "auth_ctx";
+static const char* PREF_AUTH_ACCESS_TOKEN = "auth_access";
+static const char* PREF_AUTH_REFRESH_TOKEN = "auth_refresh";
+static const char* PREF_AUTH_ID_TOKEN = "auth_id";
+static const char* PREF_CLIENT_ID = "ms_client";
+static const char* PREF_TENANT_ID = "ms_tenant";
+static const char* PREF_NUM_LEDS = "num_leds";
+static const char* PREF_POLL_INTERVAL = "poll_int";
 static const char* PREF_OTA_LAST_LOG = "ota_last_log";
 static bool loadJsonPrefs(const char* key, JsonDocument& doc);
 static bool saveJsonPrefs(const char* key, const JsonDocument& doc);
+static bool savePollIntervalPref(unsigned int pollSeconds);
+static bool loadPollIntervalPref(unsigned int& pollSeconds);
+static bool saveStringPref(const char* key, const char* value);
+static bool loadStringPref(const char* key, String& value);
+static bool saveUIntPref(const char* key, unsigned int value);
+static bool loadUIntPref(const char* key, unsigned int& value);
 static void removePrefsKey(const char* key);
 void onWifiConnected();
 void updateStatusLed();
@@ -244,10 +257,11 @@ EffectProfile* findProfile(const String& k) {
 // Save both system and effects settings into Preferences/NVS (unified config)
 void saveAppConfig() {
 	JsonDocument doc;
+	unsigned int pollSeconds = getPollIntervalSeconds();
 	JsonObject sys = doc["system"].to<JsonObject>();
 	sys["client_id"] = paramClientIdValue;
 	sys["tenant"] = paramTenantValue;
-	sys["poll_interval"] = getPollIntervalSeconds();
+	sys["poll_interval"] = pollSeconds;
 	sys["presence_source"] = paramPresenceSourceValue;
 	sys["relay_url"] = paramRelayUrlValue;
 	sys["relay_device_id"] = paramRelayDeviceIdValue;
@@ -274,6 +288,10 @@ void saveAppConfig() {
 		o["bri"] = gProfiles[i].bri;
 	}
 	saveJsonPrefs(PREF_APP_CONFIG, doc);
+	saveStringPref(PREF_CLIENT_ID, paramClientIdValue);
+	saveStringPref(PREF_TENANT_ID, paramTenantValue);
+	saveUIntPref(PREF_NUM_LEDS, (unsigned int)numberLeds);
+	savePollIntervalPref(pollSeconds);
 }
 
 // Backwards-compat wrapper
@@ -289,36 +307,72 @@ void loadAppConfig() {
 	memset(paramRelayDeviceIdValue, 0, sizeof(paramRelayDeviceIdValue));
 	memset(paramRelayDeviceKeyValue, 0, sizeof(paramRelayDeviceKeyValue));
 	gRelayTlsInsecure = DEFAULT_RELAY_TLS_INSECURE;
+	memset(paramClientIdValue, 0, sizeof(paramClientIdValue));
+	memset(paramTenantValue, 0, sizeof(paramTenantValue));
 	memset(paramWifiSsidValue, 0, sizeof(paramWifiSsidValue));
 	memset(paramWifiPasswordValue, 0, sizeof(paramWifiPasswordValue));
 	JsonDocument doc;
 	bool loadedFromPrefs = loadJsonPrefs(PREF_APP_CONFIG, doc);
+	String storedClientId;
+	String storedTenantId;
+	unsigned int storedNumLeds = 0;
+	unsigned int storedPollSeconds = 0;
+	bool loadedDedicatedClientId = loadStringPref(PREF_CLIENT_ID, storedClientId);
+	bool loadedDedicatedTenantId = loadStringPref(PREF_TENANT_ID, storedTenantId);
+	bool loadedDedicatedNumLeds = loadUIntPref(PREF_NUM_LEDS, storedNumLeds);
+	bool loadedDedicatedPollInterval = loadPollIntervalPref(storedPollSeconds);
 	if (!loadedFromPrefs) {
 		numberLeds = NUMLEDS;
+		if (loadedDedicatedClientId) strlcpy(paramClientIdValue, storedClientId.c_str(), sizeof(paramClientIdValue));
+		if (loadedDedicatedTenantId) strlcpy(paramTenantValue, storedTenantId.c_str(), sizeof(paramTenantValue));
+		if (loadedDedicatedNumLeds && storedNumLeds > 0) numberLeds = (int)storedNumLeds;
 		effects.setLength(numberLeds);
+		if (loadedDedicatedPollInterval) {
+			snprintf(paramPollIntervalValue, sizeof(paramPollIntervalValue), "%u", storedPollSeconds);
+		}
 		saveAppConfig();
 		DBG_PRINTLN(F("loadAppConfig() - created initial NVS config"));
 		return;
 	}
 	JsonObject sys = doc["system"];
 	if (!sys.isNull()) {
-		if (!sys["client_id"].isNull()) strlcpy(paramClientIdValue, sys["client_id"], sizeof(paramClientIdValue));
-		if (!sys["tenant"].isNull()) strlcpy(paramTenantValue, sys["tenant"], sizeof(paramTenantValue));
-		if (!sys["presence_source"].isNull()) strlcpy(paramPresenceSourceValue, sys["presence_source"], sizeof(paramPresenceSourceValue));
-		if (!sys["relay_url"].isNull()) strlcpy(paramRelayUrlValue, sys["relay_url"], sizeof(paramRelayUrlValue));
-		if (!sys["relay_device_id"].isNull()) strlcpy(paramRelayDeviceIdValue, sys["relay_device_id"], sizeof(paramRelayDeviceIdValue));
-		if (!sys["relay_device_key"].isNull()) strlcpy(paramRelayDeviceKeyValue, sys["relay_device_key"], sizeof(paramRelayDeviceKeyValue));
-		if (!sys["relay_tls_insecure"].isNull()) gRelayTlsInsecure = sys["relay_tls_insecure"].as<bool>();
-		if (!sys["poll_interval"].isNull()) {
+		if (loadedDedicatedClientId) {
+			strlcpy(paramClientIdValue, storedClientId.c_str(), sizeof(paramClientIdValue));
+		} else if (!sys["client_id"].isNull()) {
+			strlcpy(paramClientIdValue, sys["client_id"], sizeof(paramClientIdValue));
+			saveStringPref(PREF_CLIENT_ID, paramClientIdValue);
+		}
+		if (loadedDedicatedTenantId) {
+			strlcpy(paramTenantValue, storedTenantId.c_str(), sizeof(paramTenantValue));
+		} else if (!sys["tenant"].isNull()) {
+			strlcpy(paramTenantValue, sys["tenant"], sizeof(paramTenantValue));
+			saveStringPref(PREF_TENANT_ID, paramTenantValue);
+		}
+		if (loadedDedicatedPollInterval) {
+			snprintf(paramPollIntervalValue, sizeof(paramPollIntervalValue), "%u", storedPollSeconds);
+		} else if (!sys["poll_interval"].isNull()) {
 			unsigned int pollSeconds = sys["poll_interval"].as<unsigned int>();
 			if (pollSeconds == 0) {
 				pollSeconds = (unsigned int)atoi(DEFAULT_POLLING_PRESENCE_INTERVAL);
 			}
 			snprintf(paramPollIntervalValue, sizeof(paramPollIntervalValue), "%u", pollSeconds);
+			savePollIntervalPref(pollSeconds);
 		}
+		if (!sys["presence_source"].isNull()) strlcpy(paramPresenceSourceValue, sys["presence_source"], sizeof(paramPresenceSourceValue));
+		if (!sys["relay_url"].isNull()) strlcpy(paramRelayUrlValue, sys["relay_url"], sizeof(paramRelayUrlValue));
+		if (!sys["relay_device_id"].isNull()) strlcpy(paramRelayDeviceIdValue, sys["relay_device_id"], sizeof(paramRelayDeviceIdValue));
+		if (!sys["relay_device_key"].isNull()) strlcpy(paramRelayDeviceKeyValue, sys["relay_device_key"], sizeof(paramRelayDeviceKeyValue));
+		if (!sys["relay_tls_insecure"].isNull()) gRelayTlsInsecure = sys["relay_tls_insecure"].as<bool>();
 		if (!sys["wifi_ssid"].isNull()) strlcpy(paramWifiSsidValue, sys["wifi_ssid"], sizeof(paramWifiSsidValue));
 		if (!sys["wifi_password"].isNull()) strlcpy(paramWifiPasswordValue, sys["wifi_password"], sizeof(paramWifiPasswordValue));
-		if (!sys["num_leds"].isNull()) { numberLeds = (int)sys["num_leds"].as<int>(); effects.setLength(numberLeds); }
+		if (loadedDedicatedNumLeds && storedNumLeds > 0) {
+			numberLeds = (int)storedNumLeds;
+			effects.setLength(numberLeds);
+		} else if (!sys["num_leds"].isNull()) {
+			numberLeds = (int)sys["num_leds"].as<int>();
+			effects.setLength(numberLeds);
+			saveUIntPref(PREF_NUM_LEDS, (unsigned int)numberLeds);
+		}
 		if (!sys["fade_ms"].isNull()) gFadeDurationMs = (uint16_t)sys["fade_ms"].as<unsigned int>();
 		if (!sys["brightness"].isNull()) { gDefaultBrightness = (uint8_t)sys["brightness"].as<unsigned int>(); effects.setBrightness(gDefaultBrightness); }
 		if (!sys["gamma"].isNull()) { gGamma = sys["gamma"].as<float>(); if (isnan(gGamma) || gGamma < 0.1f) gGamma = 2.2f; if (gGamma > 5.0f) gGamma = 5.0f; effects.setGamma(gGamma); }
@@ -518,6 +572,135 @@ static bool saveJsonPrefs(const char* key, const JsonDocument& doc) {
 	bool ok = prefs.putString(key, payload) > 0;
 	prefs.end();
 	return ok;
+}
+
+static bool savePollIntervalPref(unsigned int pollSeconds) {
+	Preferences prefs;
+	if (!prefs.begin(PREFS_NAMESPACE, false)) {
+		DBG_PRINTLN(F("savePollIntervalPref() - open failed"));
+		return false;
+	}
+	bool ok = prefs.putUInt(PREF_POLL_INTERVAL, pollSeconds) > 0;
+	prefs.end();
+	return ok;
+}
+
+static bool loadPollIntervalPref(unsigned int& pollSeconds) {
+	Preferences prefs;
+	if (!prefs.begin(PREFS_NAMESPACE, true)) {
+		DBG_PRINTLN(F("loadPollIntervalPref() - open failed"));
+		return false;
+	}
+	unsigned int stored = prefs.getUInt(PREF_POLL_INTERVAL, 0);
+	prefs.end();
+	if (stored == 0) return false;
+	pollSeconds = stored;
+	return true;
+}
+
+static bool saveStringPref(const char* key, const char* value) {
+	Preferences prefs;
+	if (!prefs.begin(PREFS_NAMESPACE, false)) {
+		DBG_PRINTLN(F("saveStringPref() - open failed"));
+		return false;
+	}
+	bool ok = prefs.putString(key, value ? value : "") > 0;
+	prefs.end();
+	return ok;
+}
+
+static bool loadStringPref(const char* key, String& value) {
+	Preferences prefs;
+	if (!prefs.begin(PREFS_NAMESPACE, true)) {
+		DBG_PRINTLN(F("loadStringPref() - open failed"));
+		return false;
+	}
+	value = prefs.getString(key, "");
+	prefs.end();
+	return value.length() > 0;
+}
+
+static bool saveUIntPref(const char* key, unsigned int value) {
+	Preferences prefs;
+	if (!prefs.begin(PREFS_NAMESPACE, false)) {
+		DBG_PRINTLN(F("saveUIntPref() - open failed"));
+		return false;
+	}
+	bool ok = prefs.putUInt(key, value) > 0;
+	prefs.end();
+	return ok;
+}
+
+static bool loadUIntPref(const char* key, unsigned int& value) {
+	Preferences prefs;
+	if (!prefs.begin(PREFS_NAMESPACE, true)) {
+		DBG_PRINTLN(F("loadUIntPref() - open failed"));
+		return false;
+	}
+	unsigned int stored = prefs.getUInt(key, 0);
+	prefs.end();
+	if (stored == 0) return false;
+	value = stored;
+	return true;
+}
+
+static bool savePrefsBlobString(const char* key, const String& value) {
+	Preferences prefs;
+	if (!prefs.begin(PREFS_NAMESPACE, false)) {
+		DBG_PRINTLN(F("savePrefsBlobString() - open failed"));
+		return false;
+	}
+	prefs.remove(key);
+	size_t written = prefs.putBytes(key, value.c_str(), value.length());
+	prefs.end();
+	return written == value.length();
+}
+
+static bool loadPrefsBlobString(const char* key, String& value) {
+	Preferences prefs;
+	if (!prefs.begin(PREFS_NAMESPACE, true)) {
+		DBG_PRINTLN(F("loadPrefsBlobString() - open failed"));
+		return false;
+	}
+	size_t len = prefs.getBytesLength(key);
+	if (len == 0) {
+		prefs.end();
+		return false;
+	}
+	char* buffer = (char*)malloc(len + 1);
+	if (!buffer) {
+		prefs.end();
+		return false;
+	}
+	size_t read = prefs.getBytes(key, buffer, len);
+	prefs.end();
+	if (read != len) {
+		free(buffer);
+		return false;
+	}
+	buffer[len] = '\0';
+	value = String(buffer);
+	free(buffer);
+	return true;
+}
+
+static bool loadPrefsStringCompat(const char* key, String& value) {
+	if (loadPrefsBlobString(key, value)) {
+		return true;
+	}
+	Preferences prefs;
+	if (!prefs.begin(PREFS_NAMESPACE, true)) {
+		DBG_PRINTLN(F("loadPrefsStringCompat() - open failed"));
+		return false;
+	}
+	String stored = prefs.getString(key, "");
+	prefs.end();
+	stored.trim();
+	if (stored.length() == 0) {
+		return false;
+	}
+	value = stored;
+	return true;
 }
 
 static void removePrefsKey(const char* key) {
@@ -940,52 +1123,98 @@ static void setStatusLedColor(uint32_t color) {
 
 // Save auth context in Preferences/NVS
 void saveContext() {
-	JsonDocument contextDoc;
-	contextDoc["access_token"] = access_token.c_str();
-	contextDoc["refresh_token"] = refresh_token.c_str();
-	contextDoc["id_token"] = id_token.c_str();
-	saveJsonPrefs(PREF_AUTH_CONTEXT, contextDoc);
-	DBG_PRINT(F("saveContext() - Success: "));
-	DBG_PRINTLN(F("nvs"));
+	bool accessOk = savePrefsBlobString(PREF_AUTH_ACCESS_TOKEN, access_token);
+	bool refreshOk = savePrefsBlobString(PREF_AUTH_REFRESH_TOKEN, refresh_token);
+	bool idOk = savePrefsBlobString(PREF_AUTH_ID_TOKEN, id_token);
+	removePrefsKey(PREF_AUTH_CONTEXT); // Remove legacy combined payload once split keys are saved.
+
+	bool ok = accessOk && refreshOk && idOk;
+	DBG_PRINT(F("saveContext() - "));
+	DBG_PRINTLN(ok ? F("Success") : F("FAILED"));
+	addLogf("saveContext() - %s (a=%d r=%d i=%d)",
+		ok ? "success" : "failed",
+		accessOk ? 1 : 0,
+		refreshOk ? 1 : 0,
+		idOk ? 1 : 0);
 }
 
 boolean loadContext() {
 	boolean success = false;
-	JsonDocument contextDoc;
-	bool loadedFromPrefs = loadJsonPrefs(PREF_AUTH_CONTEXT, contextDoc);
+	String storedAccess;
+	String storedRefresh;
+	String storedId;
+	bool hasAccess = loadPrefsStringCompat(PREF_AUTH_ACCESS_TOKEN, storedAccess);
+	bool hasRefresh = loadPrefsStringCompat(PREF_AUTH_REFRESH_TOKEN, storedRefresh);
+	bool hasId = loadPrefsStringCompat(PREF_AUTH_ID_TOKEN, storedId);
 
-	if (loadedFromPrefs) {
-		int numSettings = 0;
-		if (!contextDoc["access_token"].isNull()) {
-			access_token = contextDoc["access_token"].as<String>();
-			numSettings++;
-		}
-		if (!contextDoc["refresh_token"].isNull()) {
-			refresh_token = contextDoc["refresh_token"].as<String>();
-			numSettings++;
-		}
-		if (!contextDoc["id_token"].isNull()){
-			id_token = contextDoc["id_token"].as<String>();
-			numSettings++;
-		}
-		if (numSettings == 3) {
-			success = true;
-			DBG_PRINTLN(F("loadContext() - Success"));
-			if (strlen(paramClientIdValue) > 0 && strlen(paramTenantValue) > 0) {
-				DBG_PRINTLN(F("loadContext() - Next: Refresh token."));
-				state = SMODEREFRESHTOKEN;
-			} else {
-				DBG_PRINTLN(F("loadContext() - No client id or tenant setting found."));
+	storedAccess.trim();
+	storedRefresh.trim();
+	storedId.trim();
+
+	int numSettings = 0;
+	if (hasAccess && storedAccess.length() > 0) {
+		access_token = storedAccess;
+		numSettings++;
+	}
+	if (hasRefresh && storedRefresh.length() > 0) {
+		refresh_token = storedRefresh;
+		numSettings++;
+	}
+	if (hasId && storedId.length() > 0) {
+		id_token = storedId;
+		numSettings++;
+	}
+
+	// Backwards-compatible fallback for devices that still have the legacy single JSON payload.
+	if (numSettings == 0) {
+		JsonDocument contextDoc;
+		bool loadedFromPrefs = loadJsonPrefs(PREF_AUTH_CONTEXT, contextDoc);
+		if (loadedFromPrefs) {
+			if (!contextDoc["access_token"].isNull()) {
+				access_token = contextDoc["access_token"].as<String>();
+				numSettings++;
 			}
-		} else {
-			DBG_PRINT("loadContext() - ERROR Number of valid settings in file: "); DBG_PRINT(numSettings); DBG_PRINTLN(", should be 3.");
+			if (!contextDoc["refresh_token"].isNull()) {
+				refresh_token = contextDoc["refresh_token"].as<String>();
+				numSettings++;
+			}
+			if (!contextDoc["id_token"].isNull()) {
+				id_token = contextDoc["id_token"].as<String>();
+				numSettings++;
+			}
+			if (numSettings == 3) {
+				saveContext();
+			}
 		}
+	}
+
+	if (hasRefresh && storedRefresh.length() > 0) {
+		success = true;
+		DBG_PRINTLN(F("loadContext() - Success"));
+		addLogf("loadContext() - success (%d/3)", numSettings);
+		if (strlen(paramClientIdValue) > 0 && strlen(paramTenantValue) > 0) {
+			DBG_PRINTLN(F("loadContext() - Next: Refresh token."));
+			state = SMODEREFRESHTOKEN;
+		} else {
+			DBG_PRINTLN(F("loadContext() - No client id or tenant setting found."));
+			addLog("loadContext() - missing client id or tenant");
+		}
+	} else if (numSettings > 0) {
+		DBG_PRINT("loadContext() - ERROR Number of valid settings in file: "); DBG_PRINT(numSettings); DBG_PRINTLN(", refresh token required.");
+		addLogf("loadContext() - partial context without refresh token (%d/3)", numSettings);
 	}
 
 	return success;
 }
 
 void removeContext() {
+	Preferences prefs;
+	if (prefs.begin(PREFS_NAMESPACE, false)) {
+		prefs.remove(PREF_AUTH_ACCESS_TOKEN);
+		prefs.remove(PREF_AUTH_REFRESH_TOKEN);
+		prefs.remove(PREF_AUTH_ID_TOKEN);
+		prefs.end();
+	}
 	removePrefsKey(PREF_AUTH_CONTEXT);
 	DBG_PRINTLN(F("removeContext() - Success"));
 }
@@ -1400,7 +1629,7 @@ static void playStartupSequence() {
 	if (numberLeds <= 0) return;
 	const uint32_t accentA = effects.Color(0, 255, 170);
 	const uint32_t accentB = effects.Color(48, 118, 255);
-	const unsigned long totalMs = 980;
+	const unsigned long totalMs = STARTUP_SEQUENCE_MS;
 	const unsigned long startMs = millis();
 
 	EFFECTS_LOCK();
@@ -1571,11 +1800,13 @@ void pollForToken() {
 		syncTime();
 	}
 	String payload;
-	payload.reserve(strlen(paramClientIdValue) + device_code.length() + 96);
+	String encodedClientId = urlEncodeFormValue(String(paramClientIdValue));
+	String encodedDeviceCode = urlEncodeFormValue(device_code);
+	payload.reserve(encodedClientId.length() + encodedDeviceCode.length() + 96);
 	payload += F("client_id=");
-	payload += paramClientIdValue;
+	payload += encodedClientId;
 	payload += F("&grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=");
-	payload += device_code;
+	payload += encodedDeviceCode;
 	DBG_PRINTLN("pollForToken()");
 	JsonDocument responseDoc;
 	boolean res = requestJsonApi(responseDoc, "https://login.microsoftonline.com/" + String(paramTenantValue) + "/oauth2/v2.0/token", payload, 0);
@@ -1703,11 +1934,13 @@ boolean refreshToken() {
 	}
 	boolean success = false;
 	String payload;
-	payload.reserve(strlen(paramClientIdValue) + refresh_token.length() + 48);
+	String encodedClientId = urlEncodeFormValue(String(paramClientIdValue));
+	String encodedRefreshToken = urlEncodeFormValue(refresh_token);
+	payload.reserve(encodedClientId.length() + encodedRefreshToken.length() + 48);
 	payload += F("client_id=");
-	payload += paramClientIdValue;
+	payload += encodedClientId;
 	payload += F("&grant_type=refresh_token&refresh_token=");
-	payload += refresh_token;
+	payload += encodedRefreshToken;
 	DBG_PRINTLN(F("refreshToken()"));
 	JsonDocument responseDoc;
 	boolean res = requestJsonApi(responseDoc, "https://login.microsoftonline.com/" + String(paramTenantValue) + "/oauth2/v2.0/token", payload, 0);
@@ -1983,10 +2216,11 @@ void setup()
 			static size_t s_ota_total = 0; static size_t s_ota_written = 0; static int s_ota_milestone = 0;
 			if (upload.status == UPLOAD_FILE_START) {
 				gOtaLog = String();
-				otaLogf("OTA start: %s size=%u", upload.filename.c_str(), (unsigned)upload.totalSize);
-				beginOtaVisuals();
 				// Some clients send multipart with unknown total size (chunked), handle that gracefully
 				size_t total = upload.totalSize;
+				if (total > 0) otaLogf("OTA start: %s size=%u", upload.filename.c_str(), (unsigned)total);
+				else otaLogf("OTA start: %s size=unknown", upload.filename.c_str());
+				beginOtaVisuals();
 				bool beginOk = (total > 0) ? Update.begin(total) : Update.begin(UPDATE_SIZE_UNKNOWN);
 				if (!beginOk) {
 					otaLog("OTA begin failed");
@@ -2012,7 +2246,7 @@ void setup()
 			} else if (upload.status == UPLOAD_FILE_END) {
 				bool ok = Update.end(true);
 				if (ok) {
-					otaLogf("OTA end OK, size=%u", (unsigned)upload.totalSize);
+					otaLogf("OTA end OK, size=%u", (unsigned)s_ota_written);
 				} else {
 					otaLog("OTA end failed");
 					Update.printError(Serial);
