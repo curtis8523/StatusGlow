@@ -190,6 +190,17 @@ void handleGetSettings() {
 	extern uint8_t getCpuUsagePercent();
 	responseDoc["cpu_usage"].set(getCpuUsagePercent());
 	responseDoc["sketch_version"].set(VERSION);
+	time_t now = time(nullptr);
+	if (now >= 1609459200) {
+		struct tm utcTime;
+		char timeBuf[32];
+		gmtime_r(&now, &utcTime);
+		strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S UTC", &utcTime);
+		responseDoc["device_time"].set(timeBuf);
+		responseDoc["device_time_unix"].set((int64_t)now);
+	} else {
+		responseDoc["device_time"].set("Not synced");
+	}
 
 	JsonObject ui = responseDoc["ui"].to<JsonObject>();
 	ui["cpu_ok"] = UI_CPU_OK;
@@ -214,6 +225,10 @@ void handleClearSettings() {
 	strlcpy(paramPollIntervalValue, DEFAULT_POLLING_PRESENCE_INTERVAL, sizeof(paramPollIntervalValue));
 	removePrefsKey(PREF_APP_CONFIG);
 	removePrefsKey(PREF_AUTH_CONTEXT);
+	removePrefsKey(PREF_CLIENT_ID);
+	removePrefsKey(PREF_TENANT_ID);
+	removePrefsKey(PREF_NUM_LEDS);
+	removePrefsKey(PREF_POLL_INTERVAL);
 	removePrefsKey("ota_last_log");
 	clearWifiPrefs();
 	WiFi.persistent(true);

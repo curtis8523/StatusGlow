@@ -412,6 +412,7 @@
     safeText($("home-rssi"), settings.wifi_rssi);
     safeText($("home-ssid"), settings.wifi_ssid);
     safeText($("home-ip"), settings.wifi_ip);
+    safeText($("home-device-time"), settings.device_time || "Not synced");
     safeText($("home-heap"), settings.heap);
     safeText($("home-min-heap"), settings.min_heap);
     safeText($("home-cpu-freq"), settings.cpu_freq != null ? settings.cpu_freq + " MHz" : "");

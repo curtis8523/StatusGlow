@@ -16,6 +16,7 @@
 #define APP_DEFAULT_BRIGHTNESS 128  // 0-255 default brightness
 #define DEFAULT_GAMMA 2.2f          // gamma correction factor
 #define DEFAULT_LED_TYPE_RGBW false // Default: RGB (false), RGBW (true)
+#define STARTUP_SEQUENCE_MS 2000    // startup animation length (ms)
 
 // Device/AP name
 #define THING_NAME "StatusGlow"
