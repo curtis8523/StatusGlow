@@ -47,6 +47,7 @@ env/
 secrets.h
 credentials.h
 config_local.h
+relay/config.json
 
 # Build artifacts
 *.hex

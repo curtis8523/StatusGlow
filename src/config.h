@@ -10,6 +10,8 @@
 #define DEFAULT_ERROR_RETRY_INTERVAL 30          // Retry delay after errors (seconds)
 #define TOKEN_REFRESH_TIMEOUT 60                 // Refresh token this many seconds before expiry
 #define WIFI_STA_CONNECT_TIMEOUT_MS 15000        // Wi-Fi STA connect timeout (ms)
+#define DEFAULT_PRESENCE_SOURCE "direct"         // direct=device login on each device, relay=central service
+#define DEFAULT_RELAY_TLS_INSECURE false         // allow self-signed HTTPS relay certs when explicitly enabled
 
 // LED/effects defaults
 #define DEFAULT_FADE_MS 800         // fade time between effects

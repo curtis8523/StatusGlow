@@ -51,11 +51,19 @@ WebServer server(80);
 // App parameters (persisted in unified /config.json)
 #define STRING_LEN 64
 #define INTEGER_LEN 16
+#define SOURCE_LEN 16
+#define URL_LEN 192
+#define SECRET_LEN 96
 char paramClientIdValue[STRING_LEN];
 char paramTenantValue[STRING_LEN];
 char paramPollIntervalValue[INTEGER_LEN];
 char paramWifiSsidValue[STRING_LEN];
 char paramWifiPasswordValue[STRING_LEN];
+char paramPresenceSourceValue[SOURCE_LEN];
+char paramRelayUrlValue[URL_LEN];
+char paramRelayDeviceIdValue[STRING_LEN];
+char paramRelayDeviceKeyValue[SECRET_LEN];
+bool gRelayTlsInsecure = DEFAULT_RELAY_TLS_INSECURE;
 static const char* PREFS_NAMESPACE = "statusglow";
 static const char* PREF_WIFI_SSID = "wifi_ssid";
 static const char* PREF_WIFI_PASS = "wifi_pass";
@@ -171,6 +179,31 @@ static unsigned int getPollIntervalSeconds() {
 	return pollSeconds;
 }
 
+static bool isRelayPresenceSource() {
+	String source = paramPresenceSourceValue;
+	source.trim();
+	return source.equalsIgnoreCase("relay");
+}
+
+static bool isRelayConfigured() {
+	String relayUrl = paramRelayUrlValue;
+	String relayDeviceId = paramRelayDeviceIdValue;
+	String relayDeviceKey = paramRelayDeviceKeyValue;
+	relayUrl.trim();
+	relayDeviceId.trim();
+	relayDeviceKey.trim();
+	return relayUrl.length() > 0 && relayDeviceId.length() > 0 && relayDeviceKey.length() > 0;
+}
+
+static String getRelayPresenceUrl() {
+	String baseUrl = paramRelayUrlValue;
+	baseUrl.trim();
+	while (baseUrl.endsWith("/")) {
+		baseUrl.remove(baseUrl.length() - 1);
+	}
+	return baseUrl + "/api/v1/devices/" + String(paramRelayDeviceIdValue) + "/presence";
+}
+
 // Effect profile mapping per presence activity
 struct EffectProfile {
 	const char* key;
@@ -215,6 +248,11 @@ void saveAppConfig() {
 	sys["client_id"] = paramClientIdValue;
 	sys["tenant"] = paramTenantValue;
 	sys["poll_interval"] = getPollIntervalSeconds();
+	sys["presence_source"] = paramPresenceSourceValue;
+	sys["relay_url"] = paramRelayUrlValue;
+	sys["relay_device_id"] = paramRelayDeviceIdValue;
+	sys["relay_device_key"] = paramRelayDeviceKeyValue;
+	sys["relay_tls_insecure"] = gRelayTlsInsecure;
 	sys["wifi_ssid"] = paramWifiSsidValue;
 	sys["wifi_password"] = paramWifiPasswordValue;
 	sys["num_leds"] = numberLeds;
@@ -246,6 +284,11 @@ void saveEffectsConfig() {
 
 void loadAppConfig() {
 	strlcpy(paramPollIntervalValue, DEFAULT_POLLING_PRESENCE_INTERVAL, sizeof(paramPollIntervalValue));
+	strlcpy(paramPresenceSourceValue, DEFAULT_PRESENCE_SOURCE, sizeof(paramPresenceSourceValue));
+	memset(paramRelayUrlValue, 0, sizeof(paramRelayUrlValue));
+	memset(paramRelayDeviceIdValue, 0, sizeof(paramRelayDeviceIdValue));
+	memset(paramRelayDeviceKeyValue, 0, sizeof(paramRelayDeviceKeyValue));
+	gRelayTlsInsecure = DEFAULT_RELAY_TLS_INSECURE;
 	memset(paramWifiSsidValue, 0, sizeof(paramWifiSsidValue));
 	memset(paramWifiPasswordValue, 0, sizeof(paramWifiPasswordValue));
 	JsonDocument doc;
@@ -261,6 +304,11 @@ void loadAppConfig() {
 	if (!sys.isNull()) {
 		if (!sys["client_id"].isNull()) strlcpy(paramClientIdValue, sys["client_id"], sizeof(paramClientIdValue));
 		if (!sys["tenant"].isNull()) strlcpy(paramTenantValue, sys["tenant"], sizeof(paramTenantValue));
+		if (!sys["presence_source"].isNull()) strlcpy(paramPresenceSourceValue, sys["presence_source"], sizeof(paramPresenceSourceValue));
+		if (!sys["relay_url"].isNull()) strlcpy(paramRelayUrlValue, sys["relay_url"], sizeof(paramRelayUrlValue));
+		if (!sys["relay_device_id"].isNull()) strlcpy(paramRelayDeviceIdValue, sys["relay_device_id"], sizeof(paramRelayDeviceIdValue));
+		if (!sys["relay_device_key"].isNull()) strlcpy(paramRelayDeviceKeyValue, sys["relay_device_key"], sizeof(paramRelayDeviceKeyValue));
+		if (!sys["relay_tls_insecure"].isNull()) gRelayTlsInsecure = sys["relay_tls_insecure"].as<bool>();
 		if (!sys["poll_interval"].isNull()) {
 			unsigned int pollSeconds = sys["poll_interval"].as<unsigned int>();
 			if (pollSeconds == 0) {
@@ -1569,7 +1617,7 @@ void pollForToken() {
 }
 
 // Get presence information from Microsoft Graph
-void pollPresence() {
+void pollPresenceDirect() {
 	JsonDocument responseDoc;
 	boolean res = requestJsonApi(responseDoc, "https://graph.microsoft.com/v1.0/me/presence", "", 0, "GET", true);
 
@@ -1594,6 +1642,58 @@ void pollPresence() {
 
 		setPresenceAnimation();
 	}
+}
+
+void pollPresenceRelay() {
+	if (!isRelayConfigured()) {
+		addLog("Relay mode is enabled but relay settings are incomplete");
+		state = SMODEPRESENCEREQUESTERROR;
+		retries++;
+		return;
+	}
+
+	JsonDocument responseDoc;
+	String relayDeviceKey = paramRelayDeviceKeyValue;
+	boolean res = requestJsonApi(
+		responseDoc,
+		getRelayPresenceUrl(),
+		"",
+		0,
+		"GET",
+		false,
+		"X-StatusGlow-Device-Key",
+		relayDeviceKey,
+		gRelayTlsInsecure
+	);
+
+	if (!res) {
+		addLog("Relay presence request failed");
+		state = SMODEPRESENCEREQUESTERROR;
+		retries++;
+		return;
+	}
+
+	if (!responseDoc["ok"].isNull() && !responseDoc["ok"].as<bool>()) {
+		const char* errorCode = responseDoc["error"] | "relay_error";
+		const char* message = responseDoc["message"] | "";
+		addLogf("Relay error: %s %s", errorCode, message);
+		state = SMODEPRESENCEREQUESTERROR;
+		retries++;
+		return;
+	}
+
+	availability = responseDoc["availability"] | "PresenceUnknown";
+	activity = responseDoc["activity"] | "PresenceUnknown";
+	retries = 0;
+	setPresenceAnimation();
+}
+
+void pollPresence() {
+	if (isRelayPresenceSource()) {
+		pollPresenceRelay();
+		return;
+	}
+	pollPresenceDirect();
 }
 
 // Refresh the access token
@@ -1653,7 +1753,16 @@ void statemachine() {
 			if (entered) {
 				setAnimation(0, FX_MODE_THEATER_CHASE, GREEN);
 				startMDNS();
-				loadContext();
+				if (isRelayPresenceSource()) {
+					if (isRelayConfigured()) {
+						tsPolling = millis();
+						state = SMODEPOLLPRESENCE;
+					} else {
+						addLog("Relay mode selected; configure relay URL, device ID, and device key");
+					}
+				} else {
+					loadContext();
+				}
 				DBG_PRINTLN(F("Wifi connected, waiting for requests ..."));
 			}
 			break;
@@ -1689,7 +1798,7 @@ void statemachine() {
 				DBG_PRINT("--> Availability: "); DBG_PRINT(availability.c_str()); DBG_PRINT(", Activity: "); DBG_PRINTLN(activity.c_str());
 			}
 
-			if (getTokenLifetime() < TOKEN_REFRESH_TIMEOUT) {
+			if (!isRelayPresenceSource() && getTokenLifetime() < TOKEN_REFRESH_TIMEOUT) {
 				DBG_PRINT("Token needs refresh, valid for "); DBG_PRINT(getTokenLifetime()); DBG_PRINTLN(" s.");
 				state = SMODEREFRESHTOKEN;
 			}
@@ -1712,9 +1821,10 @@ void statemachine() {
 				retries = 0;
 			}
 			DBG_PRINT("Polling presence failed, retry #"); DBG_PRINTLN(retries);
-			if (retries >= 5) {
+			if (retries >= 5 && !isRelayPresenceSource()) {
 				state = SMODEREFRESHTOKEN;
 			} else {
+				tsPolling = millis() + (DEFAULT_ERROR_RETRY_INTERVAL * 1000UL);
 				state = SMODEPOLLPRESENCE;
 			}
 			break;
@@ -1981,6 +2091,8 @@ void setup()
 		JsonDocument d;
 		d["ok"] = true;
 		d["wifi"] = (int)WiFi.status();
+		d["presence_source"] = paramPresenceSourceValue;
+		d["relay_configured"] = isRelayConfigured();
 		d["uptime_ms"] = millis();
 		d["cpu"] = (int)ESP.getCpuFreqMHz();
 		d["heap_free"] = (int)ESP.getFreeHeap();
@@ -2137,8 +2249,29 @@ void setup()
 		JsonDocument doc;
 		if (!parseJsonBody(doc)) return;
 		bool needsReboot = false;
+		bool presenceConfigChanged = false;
 		if (!doc["client_id"].isNull()) { strlcpy(paramClientIdValue, doc["client_id"], sizeof(paramClientIdValue)); }
 		if (!doc["tenant"].isNull()) { strlcpy(paramTenantValue, doc["tenant"], sizeof(paramTenantValue)); }
+		if (!doc["presence_source"].isNull()) {
+			strlcpy(paramPresenceSourceValue, doc["presence_source"], sizeof(paramPresenceSourceValue));
+			presenceConfigChanged = true;
+		}
+		if (!doc["relay_url"].isNull()) {
+			strlcpy(paramRelayUrlValue, doc["relay_url"], sizeof(paramRelayUrlValue));
+			presenceConfigChanged = true;
+		}
+		if (!doc["relay_device_id"].isNull()) {
+			strlcpy(paramRelayDeviceIdValue, doc["relay_device_id"], sizeof(paramRelayDeviceIdValue));
+			presenceConfigChanged = true;
+		}
+		if (!doc["relay_device_key"].isNull()) {
+			strlcpy(paramRelayDeviceKeyValue, doc["relay_device_key"], sizeof(paramRelayDeviceKeyValue));
+			presenceConfigChanged = true;
+		}
+		if (!doc["relay_tls_insecure"].isNull()) {
+			gRelayTlsInsecure = doc["relay_tls_insecure"].as<bool>();
+			presenceConfigChanged = true;
+		}
 		if (!doc["poll_interval"].isNull()) {
 			unsigned int pollSeconds = doc["poll_interval"].as<unsigned int>();
 			if (pollSeconds == 0) {
@@ -2158,6 +2291,15 @@ void setup()
 			ensureStatusLedReady();
 		}
 		saveAppConfig();
+		if (!needsReboot && WiFi.status() == WL_CONNECTED && presenceConfigChanged) {
+			if (isRelayPresenceSource()) {
+				retries = 0;
+				state = SMODEPOLLPRESENCE;
+				tsPolling = millis();
+			} else {
+				state = SMODEWIFICONNECTED;
+			}
+		}
 		JsonDocument resp; 
 		resp["ok"] = true; 
 		resp["needs_reboot"] = needsReboot;
@@ -2324,7 +2466,9 @@ void setup()
 		server.on("/api/current", HTTP_GET, [] {
 			if (!requireAdminAuth()) return;
 			JsonDocument d;
+			d["availability"] = availability.c_str();
 			d["activity"] = activity.c_str();
+			d["presence_source"] = paramPresenceSourceValue;
 			d["mode"] = gTarget.mode;
 			d["color"] = gTarget.color;
 			// Report current target speed in seconds

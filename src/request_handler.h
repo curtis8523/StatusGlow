@@ -4,6 +4,11 @@ extern void syncTime();
 extern bool gApEnabled;
 extern String gApSsid;
 extern bool gStatusLedEnabled;
+extern bool gRelayTlsInsecure;
+extern char paramPresenceSourceValue[];
+extern char paramRelayUrlValue[];
+extern char paramRelayDeviceIdValue[];
+extern char paramRelayDeviceKeyValue[];
 
 #ifndef DISABLECERTCHECK
 static const char rootCACertificate[] PROGMEM =
@@ -38,22 +43,30 @@ static const char rootCACertificate[] PROGMEM =
 "-----END CERTIFICATE-----\n";
 #endif
 
-boolean requestJsonApi(JsonDocument& doc, String url, String payload = "", size_t capacity = 0, String type = "POST", boolean sendAuth = false) {
+boolean requestJsonApi(JsonDocument& doc, String url, String payload = "", size_t capacity = 0, String type = "POST", boolean sendAuth = false, String extraHeaderName = "", String extraHeaderValue = "", bool allowInsecureTls = false) {
 	time_t now = time(nullptr);
 	if (now < 1609459200) {
 		DBG_PRINTLN(F("[HTTPS] Time not set; syncing via NTP..."));
 		syncTime();
 	}
 	extern void addLogf(const char*, ...);
-	WiFiClientSecure tls;
-#ifndef DISABLECERTCHECK
-	tls.setCACert(rootCACertificate);
-#else
-	tls.setInsecure();
-#endif
-
 	HTTPClient https;
-	if (https.begin(tls, url)) {
+	int httpCode = 0;
+	bool began = false;
+
+	if (url.startsWith("https://")) {
+		WiFiClientSecure tls;
+#ifndef DISABLECERTCHECK
+		if (allowInsecureTls) tls.setInsecure();
+		else tls.setCACert(rootCACertificate);
+#else
+		tls.setInsecure();
+#endif
+		began = https.begin(tls, url);
+		if (!began) {
+			DBG_PRINTLN(F("[HTTPS] Unable to connect"));
+			return false;
+		}
 		https.setConnectTimeout(10000);
 		https.setTimeout(10000);
 		https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
@@ -66,34 +79,55 @@ boolean requestJsonApi(JsonDocument& doc, String url, String payload = "", size_
 			https.addHeader("Authorization", header);
 			DBG_PRINT("[HTTPS] Auth token valid for "); DBG_PRINT(getTokenLifetime()); DBG_PRINTLN(" s.");
 		}
-
-		int httpCode = (type == "POST") ? https.POST(payload) : https.GET();
-		if (httpCode > 0) {
-			DBG_PRINT("[HTTPS] Method: "); DBG_PRINT(type.c_str()); DBG_PRINT(", Response code: "); DBG_PRINTLN(httpCode);
-			if (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_BAD_REQUEST) {
-				String body = https.getString();
-				https.end();
-				DeserializationError error = deserializeJson(doc, body);
-				if (error) {
-					DBG_PRINT(F("deserializeJson() failed: "));
-					DBG_PRINTLN(error.c_str());
-					return false;
-				}
-				return true;
-			}
-			DBG_PRINT("[HTTPS] Other HTTP code: "); DBG_PRINTLN(httpCode); DBG_PRINT("Response: ");
-			DBG_PRINTLN(https.getString());
-			https.end();
+		if (extraHeaderName.length() > 0) {
+			https.addHeader(extraHeaderName, extraHeaderValue);
+		}
+		httpCode = (type == "POST") ? https.POST(payload) : https.GET();
+	} else {
+		WiFiClient client;
+		began = https.begin(client, url);
+		if (!began) {
+			DBG_PRINTLN(F("[HTTP] Unable to connect"));
 			return false;
 		}
+		https.setConnectTimeout(10000);
+		https.setTimeout(10000);
+		https.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
 
-		DBG_PRINT("[HTTPS] Request failed: "); DBG_PRINTLN(https.errorToString(httpCode).c_str());
-		https.end();
-		addLogf("HTTPS request failed: %d", httpCode);
-		return false;
+		if (sendAuth) {
+			String header;
+			header.reserve(access_token.length() + 8);
+			header += F("Bearer ");
+			header += access_token;
+			https.addHeader("Authorization", header);
+			DBG_PRINT("[HTTPS] Auth token valid for "); DBG_PRINT(getTokenLifetime()); DBG_PRINTLN(" s.");
+		}
+		if (extraHeaderName.length() > 0) {
+			https.addHeader(extraHeaderName, extraHeaderValue);
+		}
+		httpCode = (type == "POST") ? https.POST(payload) : https.GET();
 	}
 
-	DBG_PRINTLN(F("[HTTPS] Unable to connect"));
+	if (httpCode > 0) {
+		DBG_PRINT("[HTTP] Method: "); DBG_PRINT(type.c_str()); DBG_PRINT(", Response code: "); DBG_PRINTLN(httpCode);
+		String body = https.getString();
+		https.end();
+		body.trim();
+		if (body.length() == 0) {
+			return (httpCode == HTTP_CODE_OK || httpCode == HTTP_CODE_MOVED_PERMANENTLY);
+		}
+		DeserializationError error = deserializeJson(doc, body);
+		if (error) {
+			DBG_PRINT(F("deserializeJson() failed: "));
+			DBG_PRINTLN(error.c_str());
+			return false;
+		}
+		return true;
+	}
+
+	DBG_PRINT("[HTTP] Request failed: "); DBG_PRINTLN(https.errorToString(httpCode).c_str());
+	https.end();
+	addLogf("HTTP request failed: %d", httpCode);
 	return false;
 }
 
@@ -118,6 +152,11 @@ void handleGetSettings() {
 	responseDoc["client_id"].set(paramClientIdValue);
 	responseDoc["tenant"].set(paramTenantValue);
 	responseDoc["poll_interval"].set(paramPollIntervalValue);
+	responseDoc["presence_source"].set(paramPresenceSourceValue);
+	responseDoc["relay_url"].set(paramRelayUrlValue);
+	responseDoc["relay_device_id"].set(paramRelayDeviceIdValue);
+	responseDoc["relay_device_key"].set(paramRelayDeviceKeyValue);
+	responseDoc["relay_tls_insecure"].set(gRelayTlsInsecure);
 	responseDoc["num_leds"].set(numberLeds);
 	responseDoc["led_type_rgbw"].set(gLedTypeRGBW);
 	responseDoc["status_led_enabled"].set(gStatusLedEnabled);
@@ -164,6 +203,11 @@ void handleClearSettings() {
 	DBG_PRINTLN("handleClearSettings()");
 	memset(paramClientIdValue, 0, sizeof(paramClientIdValue));
 	memset(paramTenantValue, 0, sizeof(paramTenantValue));
+	strlcpy(paramPresenceSourceValue, DEFAULT_PRESENCE_SOURCE, sizeof(paramPresenceSourceValue));
+	memset(paramRelayUrlValue, 0, sizeof(paramRelayUrlValue));
+	memset(paramRelayDeviceIdValue, 0, sizeof(paramRelayDeviceIdValue));
+	memset(paramRelayDeviceKeyValue, 0, sizeof(paramRelayDeviceKeyValue));
+	gRelayTlsInsecure = DEFAULT_RELAY_TLS_INSECURE;
 	memset(paramWifiSsidValue, 0, sizeof(paramWifiSsidValue));
 	memset(paramWifiPasswordValue, 0, sizeof(paramWifiPasswordValue));
 	strlcpy(paramPollIntervalValue, DEFAULT_POLLING_PRESENCE_INTERVAL, sizeof(paramPollIntervalValue));
@@ -178,6 +222,10 @@ void handleClearSettings() {
 }
 
 void handleStartDevicelogin() {
+	if (String(paramPresenceSourceValue).equalsIgnoreCase("relay")) {
+		sendApiError(409, "relay_mode_enabled", "Device login is disabled while the presence source is set to relay.");
+		return;
+	}
 	if (state != SMODEDEVICELOGINSTARTED) {
 		DBG_PRINTLN(F("handleStartDevicelogin()"));
 		String clientId = String(paramClientIdValue);

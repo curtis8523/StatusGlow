@@ -123,12 +123,22 @@
         <div class="page-grid">
           <section class="card">
             <div class="section-heading">
-              <h2>Microsoft Teams</h2>
+              <h2>Presence Source</h2>
             </div>
             <form id="cfg-form">
               <div class="form-grid compact-grid config-grid">
+                <label class="field-stack">
+                  Source Mode
+                  <select id="cfg-presence-source">
+                    <option value="direct">Direct Microsoft Login</option>
+                    <option value="relay">Central Relay Service</option>
+                  </select>
+                </label>
                 <label class="field-stack">Client ID<input id="cfg-client-id"></label>
                 <label class="field-stack">Tenant<input id="cfg-tenant"></label>
+                <label class="field-stack field-span-2">Relay Base URL<input id="cfg-relay-url" placeholder="http://statusglow-relay:8787"></label>
+                <label class="field-stack">Relay Device ID<input id="cfg-relay-device-id" placeholder="desk-alice-01"></label>
+                <label class="field-stack">Relay Device Key<input id="cfg-relay-device-key" type="password" placeholder="Shared device secret"></label>
                 <label class="field-stack">Presence polling (sec)<input id="cfg-poll" type="number" min="1" step="1"></label>
                 <label class="field-stack">
                   LED Type
@@ -140,9 +150,16 @@
               </div>
 
               <label class="checkbox-row mt-s">
+                <input type="checkbox" id="cfg-relay-tls-insecure">
+                <span>Allow insecure HTTPS relay certificates (lab use only)</span>
+              </label>
+
+              <label class="checkbox-row mt-s">
                 <input type="checkbox" id="cfg-status-led">
                 <span>Enable onboard status LED (GPIO21 on supported S3 boards)</span>
               </label>
+
+              <div id="cfg-source-copy" class="muted-line mt-s"></div>
 
               <div class="button-row mt">
                 <button type="submit" class="btn">Save Settings</button>

@@ -10,6 +10,7 @@ It is set up for:
 ## What It Does
 
 - Polls Microsoft Teams presence with device login
+- Can instead poll a central relay service for fleet deployments
 - Displays status with configurable LED effects and colors
 - Plays a short startup light sequence before handing off to live status
 - Lets you change RGB/RGBW mode at runtime
@@ -96,10 +97,78 @@ In the web UI Config page, provide:
 
 Then click `Start device login`, open the Microsoft device login page, and complete sign-in.
 
+## Enterprise Relay Mode
+
+For fleet deployments, each device can now switch from `Direct Microsoft Login` to `Central Relay Service` on the Config page.
+
+In relay mode:
+
+- The Docker container owns Microsoft Graph access
+- Each StatusGlow device only needs:
+  - Relay base URL
+  - Relay device ID
+  - Relay device key
+- Multiple devices can mirror the same user without repeating Microsoft sign-in on each controller
+
+### Relay Container
+
+Files added for the relay:
+
+- [relay/server.js](relay/server.js): central presence poller and device API
+- [relay/config.example.json](relay/config.example.json): sample tenant/device mapping
+- [relay/Dockerfile](relay/Dockerfile): container image
+- [docker-compose.relay.yml](docker-compose.relay.yml): simple local deployment
+
+Example startup:
+
+```bash
+cp relay/config.example.json relay/config.json
+docker compose -f docker-compose.relay.yml up --build -d
+```
+
+The relay serves:
+
+- `GET /health`
+- `GET /api/v1/devices/{deviceId}/presence`
+
+Devices authenticate with the `X-StatusGlow-Device-Key` header.
+
+### Relay Config
+
+`relay/config.json` is a simple mapping file:
+
+```json
+{
+  "tenantId": "your-tenant-id",
+  "clientId": "your-app-client-id",
+  "clientSecret": "your-app-client-secret",
+  "pollIntervalSeconds": 30,
+  "listenPort": 8787,
+  "devices": [
+    {
+      "deviceId": "desk-alice-01",
+      "apiKey": "long-random-shared-secret",
+      "userId": "entra-user-object-id",
+      "displayName": "Alice"
+    }
+  ]
+}
+```
+
+Each device entry maps one physical controller to one Microsoft Entra user object ID. If you want multiple lights to follow the same person, repeat the same `userId` with different `deviceId` values.
+
+### Relay Permissions
+
+The relay uses Microsoft Graph app-only access, so the app registration should be granted:
+
+- `Presence.Read.All` application permission
+
+Direct device login mode still uses the existing delegated setup on the device itself.
+
 ## Web UI Pages
 
 - `Home`: current status, uptime, memory, Wi-Fi, and version
-- `Config`: Wi-Fi, Teams login settings, LED type, status LED, reboot, factory reset
+- `Config`: Wi-Fi, direct-vs-relay presence settings, LED type, status LED, reboot, factory reset
 - `Effects`: single-status editor with live preview, mirrored strip preview, brightness, gamma, fade, and LED count
 - `Logs`: recent device logs
 - `Firmware`: OTA upload and last OTA log
@@ -110,6 +179,7 @@ Then click `Start device login`, open the Microsoft device login page, and compl
 - [src/config.h](src/config.h): runtime defaults, AP password, optional web UI / OTA key, status LED settings
 - [src/main.cpp](src/main.cpp): firmware logic and API routes
 - [src/request_handler.h](src/request_handler.h): API helpers and Microsoft device-login handlers
+- [relay/server.js](relay/server.js): Docker-friendly central presence relay for fleet deployments
 - `data/`: source web UI assets (`index.html`, `setup.html`, `app.css`, `app.js`) that are embedded into the firmware during build
 - [scripts/embed_assets.py](scripts/embed_assets.py): build-time asset packer for the embedded web UI
 
@@ -160,6 +230,13 @@ Teams status does not update:
 - Recheck Client ID and Tenant ID
 - Complete device login again
 - Check the Logs page
+
+Relay mode does not update:
+
+- Verify the device is set to `Central Relay Service`
+- Verify `relay/config.json` contains the device ID and matching API key
+- Confirm the mapped `userId` is the Microsoft Entra object ID for the target user
+- Open the relay `/health` endpoint and check `lastPollError`
 
 Assets like logo/favicon do not appear:
 

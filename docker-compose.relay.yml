@@ -1,0 +1,11 @@
+services:
+  statusglow-relay:
+    build:
+      context: ./relay
+    environment:
+      STATUSGLOW_CONFIG: /app/config.json
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./relay/config.json:/app/config.json:ro
+    restart: unless-stopped

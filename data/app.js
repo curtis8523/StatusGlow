@@ -67,8 +67,13 @@
 
   function cfgPayloadFromForm() {
     return {
+      presence_source: $("cfg-presence-source").value || "direct",
       client_id: $("cfg-client-id").value || "",
       tenant: $("cfg-tenant").value || "",
+      relay_url: ($("cfg-relay-url").value || "").trim(),
+      relay_device_id: ($("cfg-relay-device-id").value || "").trim(),
+      relay_device_key: $("cfg-relay-device-key").value || "",
+      relay_tls_insecure: $("cfg-relay-tls-insecure").checked,
       poll_interval: parseInt($("cfg-poll").value, 10) || 30,
       led_type_rgbw: $("cfg-led-type").value === "true",
       status_led_enabled: $("cfg-status-led").checked
@@ -77,11 +82,37 @@
 
   function configHasUnsavedChanges(payload) {
     const current = APP.settings || {};
-    return (current.client_id || "") !== (payload.client_id || "") ||
+    return (current.presence_source || "direct") !== (payload.presence_source || "direct") ||
+      (current.client_id || "") !== (payload.client_id || "") ||
       (current.tenant || "") !== (payload.tenant || "") ||
+      (current.relay_url || "") !== (payload.relay_url || "") ||
+      (current.relay_device_id || "") !== (payload.relay_device_id || "") ||
+      (current.relay_device_key || "") !== (payload.relay_device_key || "") ||
+      (!!current.relay_tls_insecure) !== (!!payload.relay_tls_insecure) ||
       (parseInt(current.poll_interval, 10) || 30) !== (payload.poll_interval || 30) ||
       (!!current.led_type_rgbw) !== (!!payload.led_type_rgbw) ||
       (!!current.status_led_enabled) !== (!!payload.status_led_enabled);
+  }
+
+  function relayModeSelected() {
+    return ($("cfg-presence-source").value || "direct") === "relay";
+  }
+
+  function updatePresenceSourceUi() {
+    const relayMode = relayModeSelected();
+    $("cfg-client-id").disabled = relayMode;
+    $("cfg-tenant").disabled = relayMode;
+    $("cfg-relay-url").disabled = !relayMode;
+    $("cfg-relay-device-id").disabled = !relayMode;
+    $("cfg-relay-device-key").disabled = !relayMode;
+    $("cfg-relay-tls-insecure").disabled = !relayMode;
+    $("cfg-device-login-btn").disabled = relayMode;
+    safeText(
+      $("cfg-source-copy"),
+      relayMode
+        ? "Relay mode is best for fleet deployments: the device polls a central service with a device ID and shared key, while the container owns Microsoft Graph access."
+        : "Direct mode keeps the current single-device behavior: each controller signs into Microsoft directly with device login and polls its own presence."
+    );
   }
 
   async function saveConfigPayload(payload) {
@@ -438,11 +469,13 @@
     $("home-ram-progress").value = Math.max(0, heapTotal - heapFree);
 
     if (current) {
+      const sourceText = current.presence_source ? " \u2022 " + current.presence_source : "";
       const currentText = (current.activity || "Presence Unknown") +
         " \u2022 " + modeName(current.mode) +
         " \u2022 " + (current.speed || 0) + "s" +
         (current.reverse ? " \u2022 Reverse" : "") +
-        " \u2022 " + toHex(current.color);
+        " \u2022 " + toHex(current.color) +
+        sourceText;
       safeText($("home-current-line"), currentText);
       $("home-swatch").style.backgroundColor = toHex(current.color);
     }
@@ -469,11 +502,17 @@
   }
 
   function fillConfig(settings) {
+    $("cfg-presence-source").value = settings.presence_source || "direct";
     $("cfg-client-id").value = settings.client_id || "";
     $("cfg-tenant").value = settings.tenant || "";
+    $("cfg-relay-url").value = settings.relay_url || "";
+    $("cfg-relay-device-id").value = settings.relay_device_id || "";
+    $("cfg-relay-device-key").value = settings.relay_device_key || "";
+    $("cfg-relay-tls-insecure").checked = !!settings.relay_tls_insecure;
     $("cfg-poll").value = parseInt(settings.poll_interval, 10) || 30;
     $("cfg-led-type").value = settings.led_type_rgbw ? "true" : "false";
     $("cfg-status-led").checked = !!settings.status_led_enabled;
+    updatePresenceSourceUi();
   }
 
   async function loadWifiState() {
@@ -568,6 +607,10 @@
         $("cfg-device-login-code").value = result.user_code || "";
         $("cfg-device-login-dialog").showModal();
       }
+
+      $("cfg-presence-source").addEventListener("change", function () {
+        updatePresenceSourceUi();
+      });
 
       $("cfg-form").addEventListener("submit", async function (event) {
         event.preventDefault();
@@ -704,6 +747,10 @@
 
       $("cfg-device-login-btn").addEventListener("click", async function () {
         const payload = cfgPayloadFromForm();
+        if ((payload.presence_source || "direct") === "relay") {
+          setMessage("cfg-status", "Device login is unavailable in relay mode. Save the relay URL, device ID, and key instead.", true);
+          return;
+        }
         if (!(payload.client_id || "").trim()) {
           setMessage("cfg-status", "Enter and save the Microsoft Client ID before starting device login.", true);
           return;
