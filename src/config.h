@@ -50,8 +50,10 @@
 // Leave blank to match the admin key behavior above.
 #define OTA_SHARED_KEY ADMIN_SHARED_KEY
 
-// Status LED configuration (onboard WS2812 on S3 board)
-#define STATUS_LED_PIN 21                // GPIO21 on Waveshare ESP32-S3-Zero (onboard WS2812)
+// Status LED configuration. Board envs can override STATUS_LED_PIN via build flags.
+#ifndef STATUS_LED_PIN
+#define STATUS_LED_PIN 21                // Default S3 status LED pin; override per board env as needed
+#endif
 #define DEFAULT_STATUS_LED_ENABLED false // Default: disabled
 
 // Render cadence for the NeoPixel task. Target ~120 FPS on ESP32-S3.

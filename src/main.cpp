@@ -102,7 +102,7 @@ float gGamma = DEFAULT_GAMMA;
 static bool gPreviewMode = false;
 static String gPreviewKey = "";
 
-// Status LED (onboard WS2812 on S3 board, GPIO21)
+// Optional status LED (pin selected per board via STATUS_LED_PIN).
 static Adafruit_NeoPixel* gStatusLed = nullptr;
 bool gStatusLedEnabled = DEFAULT_STATUS_LED_ENABLED;
 static uint32_t gStatusLedLastColor = 0xFFFFFFFFu;
